@@ -4,7 +4,8 @@ list_host_aliases() {
 		return 1
 	fi
 	echo "Current HostAliases in $CONFIG_FILE:"
-	grep -E '^Host[[:space:]]+[^ ]+$' "$CONFIG_FILE" | awk '{print $2}'
+	# Show Host aliases if present; don't fail if none are found
+	grep -E '^Host[[:space:]]+[^ ]+$' "$CONFIG_FILE" | awk '{print $2}' || true
 }
 #!/usr/bin/env bash
 set -euo pipefail
@@ -81,50 +82,97 @@ function ensure_ssh_dir_and_config() {
 add_ssh_key() {
 	ensure_ssh_dir_and_config
 
-	read -p "HostName (default: github.com): " HOSTNAME
-	HOSTNAME=${HOSTNAME:-github.com}
-
-	read -p "Key name (e.g.: personal): " HOST_ALIAS
-	if [ -z "${HOST_ALIAS}" ]; then
-		echo "Key name cannot be empty."
-		exit 1
-	fi
-	if echo "$HOST_ALIAS" | grep -q '[[:space:]]'; then
-		echo "Key name cannot contain spaces."
-		exit 1
-	fi
-
-	KEYFILE="$SSH_DIR/id_ed25519_${HOST_ALIAS}"
-
-	if [ -f "$KEYFILE" ]; then
-		echo "SSH key already exists: $KEYFILE"
-	else
-		read -p "Email for the key: " EMAIL
-		if [ -z "${EMAIL}" ]; then
-			echo "Email cannot be empty."
+	if [ -n "${1:-}" ]; then
+		KEY_PATH="$1"
+		KEY_PATH="${KEY_PATH%.pub}" # Remove .pub if present
+		if [ ! -f "$KEY_PATH" ]; then
+			echo "Error: The key file '$KEY_PATH' does not exist."
 			exit 1
 		fi
-		echo "Generating SSH key..."
-		ssh-keygen -t ed25519 -C "$EMAIL" -f "$KEYFILE"
-	fi
 
-	# Add key to ssh-agent
-	ssh-add "$KEYFILE"
-	echo "Key added to ssh-agent: $KEYFILE"
+		# Extract HOST_ALIAS from the key file name
+		BASENAME=$(basename "$KEY_PATH")
+		if [[ "$BASENAME" == id_ed25519_* ]]; then
+			HOST_ALIAS="${BASENAME#id_ed25519_}"
+		else
+			HOST_ALIAS="${BASENAME}"
+		fi
 
-	if grep -qE "^Host[[:space:]]+${HOST_ALIAS}$" "$CONFIG_FILE"; then
-		echo "Configuration for '${HOST_ALIAS}' already exists in $CONFIG_FILE."
+		read -p "HostName (default: github.com): " HOSTNAME
+		HOSTNAME=${HOSTNAME:-github.com}
+
+		if grep -qE "^Host[[:space:]]+${HOST_ALIAS}$" "$CONFIG_FILE"; then
+			echo "Configuration for '${HOST_ALIAS}' already exists in $CONFIG_FILE."
+		else
+			echo "Adding configuration to $CONFIG_FILE..."
+			{
+				echo "Host $HOST_ALIAS"
+				echo "  AddKeysToAgent yes"
+				echo "  HostName $HOSTNAME"
+				echo "  User git"
+				echo "  IdentityFile $KEY_PATH"
+				echo "  IdentitiesOnly yes"
+			} >> "$CONFIG_FILE"
+			echo "Configuration added: $HOST_ALIAS"
+		fi
+
+		# Ensure correct perms and add key to ssh-agent
+		chmod 600 "$KEY_PATH" || true
+		if ssh-add "$KEY_PATH" 2>/dev/null; then
+			echo "Key added to ssh-agent: $KEY_PATH"
+		else
+			echo "Warning: ssh-add failed for $KEY_PATH (continuing)" >&2
+		fi
 	else
-		echo "Adding configuration to $CONFIG_FILE..."
-		{
-			echo "Host $HOST_ALIAS"
-			echo "  AddKeysToAgent yes"
-			echo "  HostName $HOSTNAME"
-			echo "  User git"
-			echo "  IdentityFile $KEYFILE"
-			echo "  IdentitiesOnly yes"
-		} >> "$CONFIG_FILE"
-		echo "Configuration added: $HOST_ALIAS"
+		read -p "HostName (default: github.com): " HOSTNAME
+		HOSTNAME=${HOSTNAME:-github.com}
+
+		read -p "Key name (e.g.: personal): " HOST_ALIAS
+		if [ -z "${HOST_ALIAS}" ]; then
+			echo "Key name cannot be empty."
+			exit 1
+		fi
+		if echo "$HOST_ALIAS" | grep -q '[[:space:]]'; then
+			echo "Key name cannot contain spaces."
+			exit 1
+		fi
+
+		KEYFILE="$SSH_DIR/id_ed25519_${HOST_ALIAS}"
+
+		if [ -f "$KEYFILE" ]; then
+			echo "SSH key already exists: $KEYFILE"
+		else
+			read -p "Email for the key: " EMAIL
+			if [ -z "${EMAIL}" ]; then
+				echo "Email cannot be empty."
+				exit 1
+			fi
+			echo "Generating SSH key..."
+			ssh-keygen -t ed25519 -C "$EMAIL" -f "$KEYFILE"
+		fi
+
+	# Ensure correct perms and add key to ssh-agent
+		chmod 600 "$KEYFILE" || true
+		if ssh-add "$KEYFILE" 2>/dev/null; then
+			echo "Key added to ssh-agent: $KEYFILE"
+		else
+			echo "Warning: ssh-add failed for $KEYFILE (continuing)" >&2
+		fi
+
+		if grep -qE "^Host[[:space:]]+${HOST_ALIAS}$" "$CONFIG_FILE"; then
+			echo "Configuration for '${HOST_ALIAS}' already exists in $CONFIG_FILE."
+		else
+			echo "Adding configuration to $CONFIG_FILE..."
+			{
+				echo "Host $HOST_ALIAS"
+				echo "  AddKeysToAgent yes"
+				echo "  HostName $HOSTNAME"
+				echo "  User git"
+				echo "  IdentityFile $KEYFILE"
+				echo "  IdentitiesOnly yes"
+			} >> "$CONFIG_FILE"
+			echo "Configuration added: $HOST_ALIAS"
+		fi
 	fi
 }
 
