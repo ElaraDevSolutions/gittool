@@ -1,3 +1,11 @@
+list_host_aliases() {
+	if [ ! -f "$CONFIG_FILE" ]; then
+		echo "No SSH config file found at $CONFIG_FILE."
+		return 1
+	fi
+	echo "Current HostAliases in $CONFIG_FILE:"
+	grep -E '^Host[[:space:]]+[^ ]+$' "$CONFIG_FILE" | awk '{print $2}'
+}
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -126,6 +134,9 @@ main() {
 		remove|-r)
 			shift || true
 			remove_ssh_key "${1:-}"
+			;;
+		list|-l)
+			list_host_aliases
 			;;
 		help|-h)
 			show_help
