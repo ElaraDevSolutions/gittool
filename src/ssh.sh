@@ -49,6 +49,8 @@ remove_ssh_key() {
 
 	KEYFILE="$SSH_DIR/id_ed25519_${HOST_ALIAS}"
 	if [ -f "$KEYFILE" ]; then
+		# Remove key from ssh-agent
+		ssh-add -d "$KEYFILE" || true
 		rm -f "$KEYFILE"
 		echo "Private key removed: $KEYFILE"
 	fi
@@ -106,12 +108,17 @@ add_ssh_key() {
 		ssh-keygen -t ed25519 -C "$EMAIL" -f "$KEYFILE"
 	fi
 
+	# Add key to ssh-agent
+	ssh-add "$KEYFILE"
+	echo "Key added to ssh-agent: $KEYFILE"
+
 	if grep -qE "^Host[[:space:]]+${HOST_ALIAS}$" "$CONFIG_FILE"; then
 		echo "Configuration for '${HOST_ALIAS}' already exists in $CONFIG_FILE."
 	else
 		echo "Adding configuration to $CONFIG_FILE..."
 		{
 			echo "Host $HOST_ALIAS"
+			echo "  AddKeysToAgent yes"
 			echo "  HostName $HOSTNAME"
 			echo "  User git"
 			echo "  IdentityFile $KEYFILE"
