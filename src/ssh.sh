@@ -4,6 +4,61 @@ set -euo pipefail
 SSH_DIR="$HOME/.ssh"
 CONFIG_FILE="$SSH_DIR/config"
 
+# --- Email extraction helpers -------------------------------------------------
+# Extract the IdentityFile path for a given Host alias from the SSH config.
+get_identity_file_for_alias() {
+	local alias="$1"
+	[ -f "$CONFIG_FILE" ] || return 1
+	local identity
+	identity="$(awk -v target="$alias" '
+		/^Host[[:space:]]+/ { in_block = ($2 == target); next }
+		in_block && /^[[:space:]]*IdentityFile[[:space:]]+/ { print $2; exit }
+	' "$CONFIG_FILE" || true)"
+	# Fallback: infer by conventional naming if not found in config block
+	if [ -z "$identity" ]; then
+		local fallback="$SSH_DIR/id_ed25519_${alias}"
+		[ -f "$fallback" ] && identity="$fallback"
+	fi
+	[ -n "$identity" ] && printf '%s' "$identity"
+}
+
+# Extract email from a .pub key file. Returns 0 if found, 1 otherwise.
+extract_email_from_pub() {
+	local pub_file="$1"
+	[ -f "$pub_file" ] || return 1
+	local line email
+	line="$(head -n1 "$pub_file" || true)"
+	# Look for any email-like pattern anywhere in the line (robust against stub formats)
+	email="$(echo "$line" | grep -E -o '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' | head -n1 || true)"
+	if [ -n "$email" ]; then
+		printf '%s' "$email"
+		return 0
+	fi
+	return 1
+}
+
+# Set git user.email for the current repository based on alias's public key comment.
+set_git_email_for_alias() {
+	local alias="$1"
+	# Must be inside a git repo (caller already validates, but double-check)
+	git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "Not inside a Git repository."; return 1; }
+	local identity_file
+	identity_file="$(get_identity_file_for_alias "$alias" || true)"
+	if [ -z "${identity_file}" ]; then
+		echo "Could not locate IdentityFile for alias '$alias'."
+		return 1
+	fi
+	local pub_file="${identity_file}.pub" email
+	if email="$(extract_email_from_pub "$pub_file" 2>/dev/null)"; then
+		echo "Email extracted from key: $email"
+	else
+		read -p "Email not found in public key. Enter the email to use for this repository: " email
+		if [ -z "${email}" ]; then echo "Empty email provided. Aborting configuration."; return 1; fi
+	fi
+	git config user.email "$email"
+	echo "Git user.email set to '$email'."
+}
+
 ensure_ssh_dir_and_config() {
 	if [ ! -d "$SSH_DIR" ]; then
 		mkdir -p "$SSH_DIR" && chmod 700 "$SSH_DIR"
@@ -190,6 +245,8 @@ main() {
 			new_url="$(echo "$current_url" | sed -E "s#^git@[^:]+:#git@${chosen}:#")"
 			git remote set-url origin "$new_url"
 			echo "Updated origin to: $new_url"
+			# Configure git user.email based on the selected SSH key's public comment
+			set_git_email_for_alias "$chosen" || true
 			;;
 		help|-h) show_help ;;
 		*) echo "Unknown command: $1"; show_help; exit 1 ;;
