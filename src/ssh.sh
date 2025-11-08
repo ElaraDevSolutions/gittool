@@ -19,6 +19,7 @@ Commands (shortcuts):
 	add    (-a) [pattern|path]  Create a new key (no args) or register existing key by pattern or explicit path.
 	remove (-r) <HostAlias>     Remove SSH key files and its config block.
 	list   (-l)                 List configured Host aliases.
+	select                      Select a configured HostAlias and rewrite current Git origin URL to use it.
 	help   (-h)                 Show this help message.
 
 Pattern example:
@@ -154,6 +155,42 @@ main() {
 		add|-a) shift || true; add_ssh_key "${1:-}" ;;
 		remove|-r) shift || true; remove_ssh_key "${1:-}" ;;
 		list|-l) list_host_aliases ;;
+		select)
+			shift || true
+			ensure_ssh_dir_and_config
+			if [ ! -f "$CONFIG_FILE" ]; then echo "No SSH config file found."; exit 1; fi
+			# Portable alias collection without 'mapfile'
+			local -a aliases
+			aliases=()
+			while IFS= read -r line; do
+				local host_alias
+				host_alias="$(echo "$line" | awk '{print $2}')"
+				[ -n "$host_alias" ] && aliases+=("$host_alias")
+			done < <(grep -E '^Host[[:space:]]+[^ ]+$' "$CONFIG_FILE" || true)
+			if [ ${#aliases[@]} -eq 0 ]; then echo "No HostAliases configured."; exit 1; fi
+			local chosen=""
+			if [ ${#aliases[@]} -eq 1 ]; then
+				chosen="${aliases[0]}"
+			else
+				if command -v fzf >/dev/null 2>&1; then
+					chosen="$(printf '%s\n' "${aliases[@]}" | sort | fzf --prompt="Alias> ")"
+				else
+					echo "Select HostAlias:" >&2
+					select a in "${aliases[@]}"; do [ -n "$a" ] && chosen="$a" && break; done
+				fi
+			fi
+			if [ -z "${chosen:-}" ]; then echo "No selection made."; exit 1; fi
+			# Validate inside a Git repo
+			if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then echo "Not inside a Git repository."; exit 1; fi
+			# Get current origin URL
+			if ! current_url="$(git remote get-url origin 2>/dev/null)"; then echo "Remote 'origin' not found."; exit 1; fi
+			if [[ ! "$current_url" =~ ^git@([^:]+):(.+) ]]; then echo "Origin is not an SSH URL (git@host:path)."; exit 1; fi
+			# Replace host with chosen alias
+			local new_url
+			new_url="$(echo "$current_url" | sed -E "s#^git@[^:]+:#git@${chosen}:#")"
+			git remote set-url origin "$new_url"
+			echo "Updated origin to: $new_url"
+			;;
 		help|-h) show_help ;;
 		*) echo "Unknown command: $1"; show_help; exit 1 ;;
 	esac

@@ -27,6 +27,7 @@ Common commands:
 | `gt ssh remove <HostAlias>` | Remove key files and the Host block for the given HostAlias. |
 | `gt ssh list` | Show Host aliases declared in `~/.ssh/config`. |
 | `gt ssh help` | Show help for the SSH helper. |
+| `gt ssh select` | Interactively pick a configured HostAlias and rewrite the current repo's `origin` remote to use it. |
 | `gt clone <SSH-link>` | Clone using a selected HostAlias (replaces the host in the SSH link). |
 
 The `gt` dispatcher forwards `gt ssh ...` to the `ssh.sh` helper in the installation directory. For normal Git commands `gt` simply forwards to `git`.
@@ -93,6 +94,34 @@ This removes the Host block for `personal` from `~/.ssh/config` and deletes `~/.
 gt ssh help
 
 Shows the available SSH helper commands.
+
+7) Select a key for the current repository (new)
+
+Use this when you already have multiple HostAliases configured and want to switch which SSH identity Git uses for pushes/clones in the current repo:
+
+`gt ssh select`
+
+What it does:
+* Ensures you are inside a Git work tree and that `origin` exists.
+* Lists all configured `Host` aliases from `~/.ssh/config`.
+* Lets you choose one (via `fzf` if installed, or a numbered menu).
+* Rewrites the `origin` remote from `git@original-host:owner/repo.git` to `git@<chosen-alias>:owner/repo.git`.
+
+Example:
+
+Initial remote:
+`git@github.com:ElaraDevSolutions/gittool.git`
+
+Run:
+`gt ssh select` → choose `work-ssh`
+
+New remote:
+`git@work-ssh:ElaraDevSolutions/gittool.git`
+
+Return codes / edge cases:
+* Exits with error if not inside a Git repo, if `origin` is missing, or if the current `origin` URL is not SSH format (`git@host:path`).
+* If only one alias exists, it's auto-selected.
+* No changes are made if selection is aborted (ESC/Ctrl-C in `fzf` or empty choice).
 
 ## Cloning with a chosen HostAlias
 
