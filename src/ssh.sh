@@ -197,4 +197,3 @@ main() {
 }
 
 main "$@"
-			echo "Adding configuration to $CONFIG_FILE..."
