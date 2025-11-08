@@ -1,207 +1,163 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SSH_DIR="$HOME/.ssh"
+CONFIG_FILE="$SSH_DIR/config"
+
+ensure_ssh_dir_and_config() {
+	if [ ! -d "$SSH_DIR" ]; then
+		mkdir -p "$SSH_DIR" && chmod 700 "$SSH_DIR"
+	fi
+	if [ ! -f "$CONFIG_FILE" ]; then
+		: > "$CONFIG_FILE" && chmod 600 "$CONFIG_FILE"
+	fi
+}
+
+show_help() {
+	cat <<EOF
+Commands (shortcuts):
+	add    (-a) [pattern|path]  Create a new key (no args) or register existing key by pattern or explicit path.
+	remove (-r) <HostAlias>     Remove SSH key files and its config block.
+	list   (-l)                 List configured Host aliases.
+	help   (-h)                 Show this help message.
+
+Pattern example:
+	gt ssh add personal
+	  - Searches for existing key files containing 'personal' not yet in config.
+	  - If exactly one match, it's registered automatically; if multiple, interactive selection (fzf or select).
+EOF
+}
+
 list_host_aliases() {
 	if [ ! -f "$CONFIG_FILE" ]; then
 		echo "No SSH config file found at $CONFIG_FILE."
 		return 1
 	fi
 	echo "Current HostAliases in $CONFIG_FILE:"
-	# Show Host aliases if present; don't fail if none are found
 	grep -E '^Host[[:space:]]+[^ ]+$' "$CONFIG_FILE" | awk '{print $2}' || true
 }
-#!/usr/bin/env bash
-set -euo pipefail
 
-# Show usage/help
-show_help() {
-	cat <<EOF
-Commands (shortcuts):
-	add    (-a)              Add a new SSH key and config block (interactive).
-	remove (-r) <HostAlias>  Remove SSH key files and its config block.
-	help   (-h)              Show this help message.
-EOF
-}
-
-# Function to remove Host configuration from ~/.ssh/config
 remove_ssh_key() {
 	local HOST_ALIAS="$1"
-
 	ensure_ssh_dir_and_config
-
-	if [ -z "${HOST_ALIAS:-}" ]; then
-		echo "Missing HostAlias."
-		show_help
-		return 1
-	fi
-
-	if ! grep -qE "^Host[[:space:]]+${HOST_ALIAS}$" "$CONFIG_FILE"; then
-		echo "Host '${HOST_ALIAS}' not found in $CONFIG_FILE."
-		return 0
-	fi
-
+	if [ -z "${HOST_ALIAS:-}" ]; then echo "Missing HostAlias."; show_help; return 1; fi
+	if ! grep -qE "^Host[[:space:]]+${HOST_ALIAS}$" "$CONFIG_FILE"; then echo "Host '${HOST_ALIAS}' not found in $CONFIG_FILE."; return 0; fi
 	echo "Removing configuration for Host '${HOST_ALIAS}'..."
 	awk -v alias="$HOST_ALIAS" '
 		BEGIN {skip=0}
 		/^Host[[:space:]]+/ {
-			if ($2 == alias) { skip=1; next }
-			else if (skip) { skip=0 }
+			if ($2 == alias) { skip=1; next } else if (skip) { skip=0 }
 		}
 		skip==0 { print }
 	' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
-	echo "Configuration removed from config file."
-
 	KEYFILE="$SSH_DIR/id_ed25519_${HOST_ALIAS}"
-	if [ -f "$KEYFILE" ]; then
-		# Remove key from ssh-agent
-		ssh-add -d "$KEYFILE" || true
-		rm -f "$KEYFILE"
-		echo "Private key removed: $KEYFILE"
-	fi
-	if [ -f "$KEYFILE.pub" ]; then
-		rm -f "$KEYFILE.pub"
-		echo "Public key removed: $KEYFILE.pub"
-	fi
+	if [ -f "$KEYFILE" ]; then ssh-add -d "$KEYFILE" || true; rm -f "$KEYFILE"; echo "Private key removed: $KEYFILE"; fi
+	if [ -f "$KEYFILE.pub" ]; then rm -f "$KEYFILE.pub"; echo "Public key removed: $KEYFILE.pub"; fi
 	echo "Removal completed."
-}
-#!/bin/bash
-
-SSH_DIR="$HOME/.ssh"
-CONFIG_FILE="$SSH_DIR/config"
-
-function ensure_ssh_dir_and_config() {
-	if [ ! -d "$SSH_DIR" ]; then
-		echo "Creating ~/.ssh directory..."
-		mkdir -p "$SSH_DIR"
-		chmod 700 "$SSH_DIR"
-	fi
-	if [ ! -f "$CONFIG_FILE" ]; then
-		echo "Creating ~/.ssh/config file..."
-		touch "$CONFIG_FILE"
-		chmod 600 "$CONFIG_FILE"
-	fi
 }
 
 add_ssh_key() {
 	ensure_ssh_dir_and_config
+	local ARG="${1:-}"
 
-	if [ -n "${1:-}" ]; then
-		KEY_PATH="$1"
-		KEY_PATH="${KEY_PATH%.pub}" # Remove .pub if present
-		if [ ! -f "$KEY_PATH" ]; then
-			echo "Error: The key file '$KEY_PATH' does not exist."
-			exit 1
+	extract_alias() {
+		local f="$1" b
+		b="$(basename "$f")"; b="${b%.pub}"
+		if [[ "$b" == id_ed25519_* ]]; then printf '%s' "${b#id_ed25519_}"; else printf '%s' "$b"; fi
+	}
+
+	register_key_file() {
+		local keyfile="$1" alias="$2" hostname="$3"
+		if grep -qE "^Host[[:space:]]+${alias}$" "$CONFIG_FILE" 2>/dev/null; then echo "Configuration for '${alias}' already exists in $CONFIG_FILE."; return 0; fi
+		echo "Adding configuration to $CONFIG_FILE..."
+		{
+			echo "Host $alias"
+			echo "  AddKeysToAgent yes"
+			echo "  HostName $hostname"
+			echo "  User git"
+			echo "  IdentityFile $keyfile"
+			echo "  IdentitiesOnly yes"
+		} >> "$CONFIG_FILE"
+		chmod 600 "$keyfile" || true
+		if ssh-add "$keyfile" 2>/dev/null; then echo "Key added to ssh-agent: $keyfile"; else echo "Warning: ssh-add failed for $keyfile (continuing)" >&2; fi
+		echo "Configuration added: $alias"
+	}
+
+	search_and_select_existing_key() {
+		local pattern="$1"
+		# Initialize arrays explicitly to avoid unbound errors with set -u
+		local -a files
+		local -a candidates
+		files=()
+		candidates=()
+		if [ -d "$SSH_DIR" ]; then
+			# Use find; suppress errors if directory unreadable
+			while IFS= read -r f; do files+=("$f"); done < <(find "$SSH_DIR" -maxdepth 1 -type f -name "*${pattern}*" ! -name "*.pub" 2>/dev/null || true)
 		fi
-
-		# Extract HOST_ALIAS from the key file name
-		BASENAME=$(basename "$KEY_PATH")
-		if [[ "$BASENAME" == id_ed25519_* ]]; then
-			HOST_ALIAS="${BASENAME#id_ed25519_}"
+		# Only iterate if there is at least one file (protect against unbound expansion)
+		if [ ${#files[@]} -gt 0 ]; then
+			for f in "${files[@]}"; do
+				local a="$(extract_alias "$f")"
+				if ! grep -qE "^Host[[:space:]]+${a}$" "$CONFIG_FILE" 2>/dev/null; then
+					candidates+=("$f")
+				fi
+			done
+		fi
+		if [ ${#candidates[@]} -eq 0 ]; then
+			echo "No existing key file matching '${pattern}' found (or all already configured)." >&2
+			return 1
+		fi
+		local chosen=""
+		if [ ${#candidates[@]} -eq 1 ]; then
+			chosen="${candidates[0]}"
 		else
-			HOST_ALIAS="${BASENAME}"
+			if command -v fzf >/dev/null 2>&1; then
+				chosen="$(printf '%s\n' "${candidates[@]}" | sort | fzf --prompt="Key> ")"
+			else
+				echo "Multiple matching keys found:" >&2
+				select f in "${candidates[@]}"; do [ -n "$f" ] && chosen="$f" && break; done
+			fi
 		fi
-
+		if [ -z "${chosen}" ]; then
+			echo "No selection made." >&2
+			return 1
+		fi
+		local alias="$(extract_alias "$chosen")"
 		read -p "HostName (default: github.com): " HOSTNAME
 		HOSTNAME=${HOSTNAME:-github.com}
+		register_key_file "$chosen" "$alias" "$HOSTNAME"
+	}
 
-		if grep -qE "^Host[[:space:]]+${HOST_ALIAS}$" "$CONFIG_FILE"; then
-			echo "Configuration for '${HOST_ALIAS}' already exists in $CONFIG_FILE."
+	if [ -n "$ARG" ]; then
+		local KEY_PATH="$ARG"; KEY_PATH="${KEY_PATH%.pub}"
+		if [ -f "$KEY_PATH" ]; then
+			local BASENAME="$(basename "$KEY_PATH")" HOST_ALIAS
+			if [[ "$BASENAME" == id_ed25519_* ]]; then HOST_ALIAS="${BASENAME#id_ed25519_}"; else HOST_ALIAS="$BASENAME"; fi
+			read -p "HostName (default: github.com): " HOSTNAME; HOSTNAME=${HOSTNAME:-github.com}
+			register_key_file "$KEY_PATH" "$HOST_ALIAS" "$HOSTNAME"
 		else
-			echo "Adding configuration to $CONFIG_FILE..."
-			{
-				echo "Host $HOST_ALIAS"
-				echo "  AddKeysToAgent yes"
-				echo "  HostName $HOSTNAME"
-				echo "  User git"
-				echo "  IdentityFile $KEY_PATH"
-				echo "  IdentitiesOnly yes"
-			} >> "$CONFIG_FILE"
-			echo "Configuration added: $HOST_ALIAS"
-		fi
-
-		# Ensure correct perms and add key to ssh-agent
-		chmod 600 "$KEY_PATH" || true
-		if ssh-add "$KEY_PATH" 2>/dev/null; then
-			echo "Key added to ssh-agent: $KEY_PATH"
-		else
-			echo "Warning: ssh-add failed for $KEY_PATH (continuing)" >&2
+			search_and_select_existing_key "$ARG" || exit 1
 		fi
 	else
-		read -p "HostName (default: github.com): " HOSTNAME
-		HOSTNAME=${HOSTNAME:-github.com}
-
-		read -p "Key name (e.g.: personal): " HOST_ALIAS
-		if [ -z "${HOST_ALIAS}" ]; then
-			echo "Key name cannot be empty."
-			exit 1
-		fi
-		if echo "$HOST_ALIAS" | grep -q '[[:space:]]'; then
-			echo "Key name cannot contain spaces."
-			exit 1
-		fi
-
-		KEYFILE="$SSH_DIR/id_ed25519_${HOST_ALIAS}"
-
-		if [ -f "$KEYFILE" ]; then
-			echo "SSH key already exists: $KEYFILE"
-		else
-			read -p "Email for the key: " EMAIL
-			if [ -z "${EMAIL}" ]; then
-				echo "Email cannot be empty."
-				exit 1
-			fi
-			echo "Generating SSH key..."
-			ssh-keygen -t ed25519 -C "$EMAIL" -f "$KEYFILE"
-		fi
-
-	# Ensure correct perms and add key to ssh-agent
-		chmod 600 "$KEYFILE" || true
-		if ssh-add "$KEYFILE" 2>/dev/null; then
-			echo "Key added to ssh-agent: $KEYFILE"
-		else
-			echo "Warning: ssh-add failed for $KEYFILE (continuing)" >&2
-		fi
-
-		if grep -qE "^Host[[:space:]]+${HOST_ALIAS}$" "$CONFIG_FILE"; then
-			echo "Configuration for '${HOST_ALIAS}' already exists in $CONFIG_FILE."
-		else
-			echo "Adding configuration to $CONFIG_FILE..."
-			{
-				echo "Host $HOST_ALIAS"
-				echo "  AddKeysToAgent yes"
-				echo "  HostName $HOSTNAME"
-				echo "  User git"
-				echo "  IdentityFile $KEYFILE"
-				echo "  IdentitiesOnly yes"
-			} >> "$CONFIG_FILE"
-			echo "Configuration added: $HOST_ALIAS"
-		fi
+		read -p "HostName (default: github.com): " HOSTNAME; HOSTNAME=${HOSTNAME:-github.com}
+		read -p "Key name (e.g.: personal): " HOST_ALIAS; [ -z "${HOST_ALIAS}" ] && { echo "Key name cannot be empty."; exit 1; }
+		if echo "$HOST_ALIAS" | grep -q '[[:space:]]'; then echo "Key name cannot contain spaces."; exit 1; fi
+		local KEYFILE="$SSH_DIR/id_ed25519_${HOST_ALIAS}"
+		if [ -f "$KEYFILE" ]; then echo "SSH key already exists: $KEYFILE"; else read -p "Email for the key: " EMAIL; [ -z "${EMAIL}" ] && { echo "Email cannot be empty."; exit 1; }; echo "Generating SSH key..."; ssh-keygen -t ed25519 -C "$EMAIL" -f "$KEYFILE"; fi
+		register_key_file "$KEYFILE" "$HOST_ALIAS" "$HOSTNAME"
 	fi
 }
 
 main() {
-	if [ $# -eq 0 ]; then
-		show_help
-		exit 0
-	fi
-
+	if [ $# -eq 0 ]; then show_help; exit 0; fi
 	case "$1" in
-		add|-a)
-			add_ssh_key
-			;;
-		remove|-r)
-			shift || true
-			remove_ssh_key "${1:-}"
-			;;
-		list|-l)
-			list_host_aliases
-			;;
-		help|-h)
-			show_help
-			;;
-		*)
-			echo "Unknown command: $1"
-			show_help
-			exit 1
-			;;
+		add|-a) shift || true; add_ssh_key "${1:-}" ;;
+		remove|-r) shift || true; remove_ssh_key "${1:-}" ;;
+		list|-l) list_host_aliases ;;
+		help|-h) show_help ;;
+		*) echo "Unknown command: $1"; show_help; exit 1 ;;
 	esac
 }
 
 main "$@"
+			echo "Adding configuration to $CONFIG_FILE..."
