@@ -221,14 +221,45 @@ Potential additional channels (pick those that bring real user value; simplest f
 
 What NOT to prioritize early: Flatpak (not ideal for simple CLI), AppImage (benefits mostly binaries, not bash scripts).
 
-### Suggested next steps to broaden distribution
+### Automated release flow
 
-1. Start tagging releases (`git tag v0.1.0 && git push --tags`) and create GitHub Releases with changelog + checksums.
-2. Add a small `Makefile` target to produce a tarball with just `src/` + `install.sh` and maybe pre-computed SHA256.
-3. (Optional) Add a GPG signing key and publish detached signatures for `install.sh` and tarballs.
-4. Later, add a simple `fpm` script to build `.deb` and `.rpm` artifacts for Releases.
+When you push a tag `vX.Y.Z`:
+1. GitHub Actions workflow `release.yml` runs.
+2. It builds archives (`tar.gz`, `zip`), `.deb`, `.rpm`, and `SHA256SUMS`.
+3. Checksums are verified and the relevant changelog section is extracted.
+4. Assets are attached to the GitHub Release created (or updated) for the tag.
 
-Feel free to open an issue if you want help bootstrapping any specific package format.
+Manual scripts (under `scripts/`):
+| Script | Purpose |
+|--------|---------|
+| `release_checksums.sh` | Create `tar.gz`, `zip`, and `SHA256SUMS`. |
+| `build_fpm_packages.sh` | Generate `.deb` and `.rpm` using `fpm`. |
+| `sign_release.sh` | GPG sign artifacts (optional). |
+| `update_homebrew_formula.sh` | Update external Homebrew tap formula with version + sha256. |
+
+### Updating the Homebrew tap (external repo)
+
+Assuming sibling repo layout:
+```
+gittool/
+homebrew-tools/
+```
+Run a release, then:
+```
+bash scripts/update_homebrew_formula.sh --version vX.Y.Z
+cd ../homebrew-tools
+git add Formula/gt.rb
+git commit -m "gt: update to vX.Y.Z"
+git push
+```
+The script replaces the version in the formula `url` and updates `sha256` to match the new source archive.
+
+### Suggested future enhancements
+* Optional GPG auto-sign integration in CI (provide `GPG_PRIVATE_KEY` + `GPG_PASSPHRASE` secrets).
+* Publish asdf plugin for easy multi-tool management.
+* Provide a Nix flake for reproducible installations.
+
+Open an issue if you want help bootstrapping any further distribution channel.
 
 ## License
 
