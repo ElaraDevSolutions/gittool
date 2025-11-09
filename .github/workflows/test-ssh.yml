@@ -1,4 +1,4 @@
-name: SSH Script Tests
+name: gittool tests
 on:
   pull_request:
     branches:
@@ -7,12 +7,12 @@ on:
     branches:
       - main
 jobs:
-  test-ssh:
+  tests:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Run SSH script tests
+      - name: Run all tests
         run: |
-          chmod +x ./test/test_ssh.sh
-          bash ./test/test_ssh.sh
+          chmod +x ./test/test_ssh.sh ./test/test_install.sh ./test/run_all.sh
+          bash ./test/run_all.sh
