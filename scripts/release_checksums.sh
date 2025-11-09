@@ -1,23 +1,41 @@
 #!/usr/bin/env bash
 # Generate release archives and SHA256 checksums for gittool.
-# Usage: scripts/release_checksums.sh --version v1.0.5
+# Usage:
+#   scripts/release_checksums.sh --version v1.0.5
+#   scripts/release_checksums.sh --version=v1.0.5
+#   scripts/release_checksums.sh -v v1.0.5
 set -euo pipefail
 
 VERSION=""
 OUT_DIR="dist"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-for arg in "$@"; do
-  case "$arg" in
-    --version=*) VERSION="${arg#*=}" ;;
-    -h|--help)
-      echo "Usage: $0 --version vX.Y.Z"; exit 0 ;;
-    *) echo "Unknown option: $arg" >&2; exit 1 ;;
+usage() {
+  cat <<EOF
+Generate release archives and SHA256 checksums for gittool.
+
+Usage: $0 --version vX.Y.Z
+  --version vX.Y.Z    Version tag (space separated)
+  --version=vX.Y.Z    Version tag (equals form)
+  -v vX.Y.Z           Short version flag
+  -h, --help          Show this help text
+EOF
+}
+
+# Parse arguments, accepting both '--version value' and '--version=value'
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --version=*) VERSION="${1#*=}"; shift ;;
+    --version)  [[ $# -lt 2 ]] && { echo "Missing value after --version" >&2; usage; exit 1; }; VERSION="$2"; shift 2 ;;
+    -v)         [[ $# -lt 2 ]] && { echo "Missing value after -v" >&2; usage; exit 1; }; VERSION="$2"; shift 2 ;;
+    -h|--help)  usage; exit 0 ;;
+    *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
   esac
 done
 
 if [[ -z "$VERSION" ]]; then
   echo "Missing --version argument (e.g. --version v1.0.5)" >&2
+  usage
   exit 1
 fi
 
