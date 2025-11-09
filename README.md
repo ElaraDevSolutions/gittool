@@ -16,6 +16,46 @@ brew install gt
 ```
 After installation the `gt` executable will be on your PATH. Locally (from source) you can run the scripts under `src/` directly (for example `bash src/gt.sh ssh help`).
 
+### Alternative install (portable script)
+
+If you don't (or can't) use Homebrew (e.g. on minimal Linux images), a self-contained installer script is provided. It copies the scripts under `src/` to a prefix and creates a lightweight wrapper `gt` in `<prefix>/bin`.
+
+Quick install (defaults to `/usr/local` if writable, otherwise `~/.local`):
+
+```
+curl -fsSL https://raw.githubusercontent.com/ElaraDevSolutions/gittool/v1.0.4/install.sh | bash
+```
+
+You can override the prefix:
+
+```
+curl -fsSL https://raw.githubusercontent.com/ElaraDevSolutions/gittool/v1.0.4/install.sh | bash -s -- --prefix=$HOME/.local
+```
+
+Options supported by `install.sh`:
+
+| Option | Description |
+|--------|-------------|
+| `--prefix=DIR` | Installation root (`DIR/bin/gt` + `DIR/lib/gittool`). |
+| `--force` | Overwrite existing files. |
+| `--uninstall` | Remove previously installed wrapper and library directory. |
+| `--dry-run` | Show actions without performing them. |
+| `-h, --help` | Show help extracted from the script header. |
+
+After install, ensure `<prefix>/bin` is on your PATH (add `export PATH="<prefix>/bin:$PATH"` to your shell profile if needed). Upgrading is just re-running the install command (possibly with `--force`). Uninstall with:
+
+```
+bash install.sh --uninstall --prefix=/usr/local   # or the prefix you used
+```
+
+Security note: Prefer pinning to a version tag (`vX.Y.Z`) instead of a mutable branch name. Optionally download first and inspect:
+
+```
+curl -fsSLO https://raw.githubusercontent.com/ElaraDevSolutions/gittool/vX.Y.Z/install.sh
+less install.sh  # inspect
+bash install.sh
+```
+
 ## Quick overview
 
 Common commands:
@@ -152,6 +192,43 @@ Example flow (multiple keys configured):
 ## Contributing
 
 Patches, bug reports and improvements are welcome. Tests are a small bash test script under `test/test_ssh.sh` that runs in an isolated temporary HOME.
+
+## Distribution / packaging options
+
+Current distribution: Homebrew tap + raw repo.
+
+Potential additional channels (pick those that bring real user value; simplest first):
+
+1. GitHub Releases (recommended early step)
+	- For each version tag (`vX.Y.Z`), create a Release and attach a tarball or just rely on the auto-generated source tarball. Provide SHA256 sums. Users can: `curl -L -o gittool.tgz ...` and extract, or consume the `install.sh` pinned to the tag.
+2. Linuxbrew (already supported implicitly)  
+	- The existing Homebrew formula works on Linux if users install Homebrew (Linuxbrew). Just document it.
+3. Simple curl|bash installer (done)  
+	- Already covered above. Optionally add a signature (GPG) and detached `.asc` file in Releases.
+4. Debian / Ubuntu (`.deb` package)  
+	- Create a minimal deb: place scripts into `/usr/lib/gittool` or `/usr/share/gittool` and a symlink `/usr/bin/gt`. Tools: `dpkg-deb` manually or use `fpm` (`fpm -s dir -t deb ...`).  
+	- To publish broadly, either host your own APT repo (serve `Release`, `Packages`, etc.) or use a PPA via Launchpad (requires packaging metadata). For a simple project, publishing a `.deb` asset in Releases might be enough for advanced users.
+5. RPM (Fedora / RHEL / openSUSE)  
+	- Similar: use `fpm -s dir -t rpm ...` or create an RPM spec and build with `rpmbuild`. Host via OBS (openSUSE Build Service) for multiple distros.
+6. Snap (optional)  
+	- Create a `snapcraft.yaml` with a `command: gt`; confinement: `classic` may be needed for seamless access to SSH keys. Users then `snap install gittool --classic`. Overhead may not justify for small bash scripts.
+7. Nix / flakes  
+	- Provide a `default.nix` or `flake.nix` that installs scripts and wrapper. Users: `nix profile install github:ElaraDevSolutions/gittool` (if flake). Very low maintenance once added.
+8. asdf plugin  
+	- Create `asdf-community/asdf-gittool` (or your namespace) with a `bin/install` that fetches a tagged tarball and places `gt` on PATH. Popular for multi-language/dev-tool environments.
+9. Homebrew Core (later)  
+	- Once stable and with sufficient popularity, you could propose inclusion in homebrew-core for broader visibility (must meet their acceptance guidelines).
+
+What NOT to prioritize early: Flatpak (not ideal for simple CLI), AppImage (benefits mostly binaries, not bash scripts).
+
+### Suggested next steps to broaden distribution
+
+1. Start tagging releases (`git tag v0.1.0 && git push --tags`) and create GitHub Releases with changelog + checksums.
+2. Add a small `Makefile` target to produce a tarball with just `src/` + `install.sh` and maybe pre-computed SHA256.
+3. (Optional) Add a GPG signing key and publish detached signatures for `install.sh` and tarballs.
+4. Later, add a simple `fpm` script to build `.deb` and `.rpm` artifacts for Releases.
+
+Feel free to open an issue if you want help bootstrapping any specific package format.
 
 ## License
 
