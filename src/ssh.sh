@@ -75,6 +75,7 @@ Commands (shortcuts):
 	remove (-r) <HostAlias>     Remove SSH key files and its config block.
 	list   (-l)                 List configured Host aliases.
 	select                      Select a configured HostAlias and rewrite current Git origin URL to use it.
+	sign-status                 Show if current signing key is in allowed_signers.
 	help   (-h)                 Show this help message.
 
 Pattern example:
@@ -136,6 +137,7 @@ add_ssh_key() {
 		} >> "$CONFIG_FILE"
 		chmod 600 "$keyfile" || true
 		if ssh-add "$keyfile" 2>/dev/null; then echo "Key added to ssh-agent: $keyfile"; else echo "Warning: ssh-add failed for $keyfile (continuing)" >&2; fi
+		ensure_signing_setup "$keyfile" || true
 		echo "Configuration added: $alias"
 	}
 
@@ -204,12 +206,70 @@ add_ssh_key() {
 	fi
 }
 
+# --- Git SSH signing helpers -------------------------------------------------
+ensure_signing_setup() {
+	local private_key="$1"
+	[ -f "$private_key" ] || return 0
+	local pub_key="${private_key}.pub"
+	[ -f "$pub_key" ] || { echo "Public key not found: $pub_key" >&2; return 0; }
+	local allowed_file="$HOME/.config/git/allowed_signers"
+	mkdir -p "$HOME/.config/git"
+	[ -f "$allowed_file" ] || : > "$allowed_file"
+	# Detect existing
+	local pub_content email
+	pub_content="$(cat "$pub_key")"
+	# Attempt to discover email
+	email="$(git config user.email 2>/dev/null || true)"
+	if [ -z "$email" ]; then
+		if email_from_pub="$(extract_email_from_pub "$pub_key" 2>/dev/null)"; then
+			email="$email_from_pub"
+		fi
+	fi
+	if [ -z "$email" ]; then
+		read -p "Email not detected. Provide email for signing: " email
+	fi
+	if [ -z "$email" ]; then echo "Empty email; skipping signing setup."; return 0; fi
+	if grep -Fq "$pub_content" "$allowed_file"; then
+		echo "Key already present in allowed_signers."; else
+		read -p "Add key to allowed_signers for commit signing? [y/N]: " ans
+		case "$ans" in
+			[yY]|[yY][eE][sS]) echo "$email $pub_content" >> "$allowed_file"; echo "Added to allowed_signers." ;;
+			*) echo "Not added." ;;
+		esac
+	fi
+	# Configure git global allowedSignersFile
+	local current_allowed
+	current_allowed="$(git config --global gpg.ssh.allowedSignersFile 2>/dev/null || true)"
+	if [ "$current_allowed" != "$allowed_file" ]; then
+		git config --global gpg.ssh.allowedSignersFile "$allowed_file"
+		echo "Set gpg.ssh.allowedSignersFile -> $allowed_file"
+	fi
+	# Ensure signingkey points to private key (not .pub)
+	local current_signing
+	current_signing="$(git config --global user.signingkey 2>/dev/null || true)"
+	if [ -z "$current_signing" ] || [[ "$current_signing" == *.pub ]]; then
+		git config --global user.signingkey "$private_key"
+		echo "Set user.signingkey -> $private_key"
+	fi
+}
+
+sign_status() {
+	local allowed_file="$HOME/.config/git/allowed_signers"
+	local signing_key="$(git config --global user.signingkey 2>/dev/null || true)"
+	[ -z "$signing_key" ] && { echo "No global user.signingkey set."; return 0; }
+	local pub="${signing_key}.pub"
+	[ -f "$pub" ] || { echo "Public key not found: $pub"; return 0; }
+	if [ -f "$allowed_file" ] && grep -Fq "$(cat "$pub")" "$allowed_file"; then
+		echo "Status: key IS in allowed_signers ($allowed_file)"; else echo "Status: key NOT in allowed_signers"; fi
+}
+
 main() {
 	if [ $# -eq 0 ]; then show_help; exit 0; fi
 	case "$1" in
 		add|-a) shift || true; add_ssh_key "${1:-}" ;;
 		remove|-r) shift || true; remove_ssh_key "${1:-}" ;;
 		list|-l) list_host_aliases ;;
+		sign-status) sign_status ;;
 		select)
 			shift || true
 			ensure_ssh_dir_and_config
@@ -247,6 +307,9 @@ main() {
 			echo "Updated origin to: $new_url"
 			# Configure git user.email based on the selected SSH key's public comment
 			set_git_email_for_alias "$chosen" || true
+			# Ensure signing setup for chosen alias
+			identity_file="$(get_identity_file_for_alias "$chosen" || true)"
+			[ -n "$identity_file" ] && ensure_signing_setup "$identity_file" || true
 			;;
 		help|-h) show_help ;;
 		*) echo "Unknown command: $1"; show_help; exit 1 ;;

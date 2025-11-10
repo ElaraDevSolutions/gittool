@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 # Update external Homebrew tap formula with new version and checksum.
 # Features:
-#   - Clona o repositório do tap se não existir (default: https://github.com/ElaraDevSolutions/homebrew-tools.git)
-#   - Atualiza a fórmula gt.rb com nova versão e sha256 do tarball gerado em dist/
-#   - Opções flexíveis para versão e caminho do tap.
-#   - Pode fazer commit + push automático com --commit.
-# Uso:
+#   - Clone tap repository if missing (default: https://github.com/ElaraDevSolutions/homebrew-tools.git)
+#   - Update gt.rb formula with new version and SHA256 from dist/ tarball.
+#   - Flexible options for version and tap location.
+#   - Can optionally git commit + push with --commit.
+# Usage:
 #   scripts/update_homebrew_formula.sh --version v1.2.3 --commit
 #   scripts/update_homebrew_formula.sh --version=v1.2.3 --tap-url https://github.com/YourOrg/homebrew-tools.git
 # Flags:
-#   --version / --version= / -v   Versão (ex: v1.2.3)
-#   --tap-url URL                 URL do repo tap (HTTPS)
-#   --tap-dir DIR                 Diretório destino (default: ../homebrew-tools)
-#   --commit                      Faz git add/commit/push
-#   -h / --help                   Mostra ajuda
-# Auth para push cross-repo:
-#   Necessário PAT com permissões repo (ex: segredo HOMEBREW_TAP_PAT). GITHUB_TOKEN NÃO consegue push em outro repo.
+#   --version / --version= / -v   Version (e.g. v1.2.3)
+#   --tap-url URL                 Tap repository URL (HTTPS)
+#   --tap-dir DIR                 Destination directory (default: ../homebrew-tools)
+#   --commit                      Perform git add/commit/push
+#   -h / --help                   Show help text
+# Auth for cross-repo push:
+#   Requires a PAT with repo permissions (secret HOMEBREW_TAP_PAT). GITHUB_TOKEN usually cannot push to another repo.
 set -euo pipefail
 
 VERSION=""
@@ -46,7 +46,7 @@ VERSION_NO_V="${VERSION#v}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT/dist"
 
-# Clonar ou atualizar tap
+# Clone or update tap
 if [[ ! -d "$TAP_DIR/.git" ]]; then
   echo "Cloning tap repo $TAP_URL into $TAP_DIR";
   git clone "$TAP_URL" "$TAP_DIR"
@@ -68,7 +68,7 @@ fi
 SHA256=$(shasum -a 256 "$DIST_DIR/$TARBALL" | awk '{print $1}')
 echo "Updating formula to version $VERSION with sha256 $SHA256"
 
-# Editar fórmula
+# Edit formula file
 tmp_file="$(mktemp)"
 awk -v ver="$VERSION" -v sha="$SHA256" 'BEGIN{u_done=0;s_done=0} {
   if ($0 ~ /url "/ && u_done==0) { gsub(/v[0-9.]+/, ver); print; u_done=1; next }
@@ -81,12 +81,12 @@ echo "Formula updated: $FORMULA"
 if [[ $DO_COMMIT -eq 1 ]]; then
   echo "Committing and pushing changes to tap repo"
   (cd "$TAP_DIR" && git add Formula/gt.rb && git commit -m "gt: update to $VERSION" || echo "No changes to commit")
-  # Autenticação: usar HOMEBREW_TAP_PAT se existir; caso contrário tentar GITHUB_TOKEN (pode falhar cross-repo)
+  # Auth: prefer HOMEBREW_TAP_PAT if present; fallback to GITHUB_TOKEN (may fail cross-repo)
   GIT_PUSH_TOKEN="${HOMEBREW_TAP_PAT:-${GITHUB_TOKEN:-}}"
   if [[ -z "$GIT_PUSH_TOKEN" ]]; then
     echo "WARNING: No token (HOMEBREW_TAP_PAT or GITHUB_TOKEN) set; skipping push." >&2
   else
-    # Reescreve origem para incluir token (somente se URL for github HTTPS)
+  # Rewrite origin remote to embed token (only for github HTTPS URL)
     if [[ "$TAP_URL" == https://github.com/* ]]; then
       (cd "$TAP_DIR" && git remote set-url origin "https://${GITHUB_ACTOR:-bot}:$GIT_PUSH_TOKEN@github.com/${TAP_URL#https://github.com/}" )
     fi

@@ -163,6 +163,28 @@ Return codes / edge cases:
 * If only one alias exists, it's auto-selected.
 * No changes are made if selection is aborted (ESC/Ctrl-C in `fzf` or empty choice).
 
+### SSH commit signing automation
+
+Ao adicionar ou selecionar uma chave, o helper tenta configurar assinatura de commits via SSH:
+
+1. Cria (se necessário) `~/.config/git/allowed_signers` e adiciona uma linha `email chave_publica` se a chave ainda não estiver presente.
+2. Define `git config --global gpg.ssh.allowedSignersFile ~/.config/git/allowed_signers`.
+3. Ajusta `git config --global user.signingkey` para apontar para o arquivo de chave privada (sem `.pub`).
+4. Comando de verificação: `gt ssh sign-status`.
+
+Se o e-mail não puder ser detectado (via `git config user.email` ou comentário da chave `.pub`), será solicitado interativamente.
+
+Para assinar commits:
+```bash
+git config --global commit.gpgsign true
+git commit -S -m "feat: exemplo"
+```
+
+Status rápido:
+```bash
+gt ssh sign-status
+```
+
 ## Cloning with a chosen HostAlias
 
 `gt` includes a tiny wrapper around `git clone` that replaces the host portion of an SSH repo link with a selected HostAlias from your SSH config. Example:
@@ -253,6 +275,16 @@ git commit -m "gt: update to vX.Y.Z"
 git push
 ```
 The script replaces the version in the formula `url` and updates `sha256` to match the new source archive.
+
+### SSH signing (recap)
+Caso queira configurar manualmente:
+```bash
+mkdir -p ~/.config/git
+echo "seu.email@exemplo.com $(cat ~/.ssh/sua-chave.pub)" >> ~/.config/git/allowed_signers
+git config --global gpg.ssh.allowedSignersFile ~/.config/git/allowed_signers
+git config --global user.signingkey /Users/seuuser/.ssh/sua-chave
+git config --global commit.gpgsign true
+```
 
 ### Suggested future enhancements
 * Optional GPG auto-sign integration in CI (provide `GPG_PRIVATE_KEY` + `GPG_PASSPHRASE` secrets).
