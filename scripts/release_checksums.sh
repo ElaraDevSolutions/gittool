@@ -52,20 +52,21 @@ tar -czf "$ARCHIVE_TGZ" -C "$PROJECT_ROOT" install.sh src README.md LICENCE.md |
 zip -q -r "$ARCHIVE_ZIP" install.sh src README.md LICENCE.md || {
   echo "Failed to create zip archive" >&2; exit 1; }
 
-echo "==> Generating SHA256 checksums"
+echo "==> Generating SHA256 checksums (relative filenames)"
 rm -f "$CHECKSUM_FILE"
+pushd "$OUT_DIR" >/dev/null
 {
-  shasum -a 256 "$ARCHIVE_TGZ"
-  shasum -a 256 "$ARCHIVE_ZIP"
-  shasum -a 256 "$PROJECT_ROOT/install.sh"
+  shasum -a 256 "$(basename "$ARCHIVE_TGZ")"
+  shasum -a 256 "$(basename "$ARCHIVE_ZIP")"
   # Include native packages if they were already built
-  if [ -f "$OUT_DIR/gittool_${NUM_VERSION}_all.deb" ]; then
-    shasum -a 256 "$OUT_DIR/gittool_${NUM_VERSION}_all.deb"
+  if [ -f "gittool_${NUM_VERSION}_all.deb" ]; then
+    shasum -a 256 "gittool_${NUM_VERSION}_all.deb"
   fi
-  if [ -f "$OUT_DIR/gittool-${NUM_VERSION}-1.noarch.rpm" ]; then
-    shasum -a 256 "$OUT_DIR/gittool-${NUM_VERSION}-1.noarch.rpm"
+  if [ -f "gittool-${NUM_VERSION}-1.noarch.rpm" ]; then
+    shasum -a 256 "gittool-${NUM_VERSION}-1.noarch.rpm"
   fi
-} > "$CHECKSUM_FILE"
+} > "$(basename "$CHECKSUM_FILE")"
+popd >/dev/null
 
 echo "==> Checksums written to $CHECKSUM_FILE"
 echo "==> Example verification:"
@@ -73,4 +74,5 @@ echo "    shasum -a 256 -c <(grep install.sh $CHECKSUM_FILE | sed 's# $PROJECT_R
 
 echo "Artifacts present in $OUT_DIR:"
 ls -1 "$OUT_DIR" | sed 's/^/  /'
+echo "==> SHA256SUMS contents:"; cat "$CHECKSUM_FILE"
 echo "Done."
