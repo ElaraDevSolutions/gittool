@@ -64,25 +64,33 @@ jobs:
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "Detected version: $VERSION"
 
-      - name: Build archives + checksums
+      - name: Build fpm packages (.deb/.rpm)
+        run: |
+          bash scripts/build_fpm_packages.sh --version "${{ steps.ver.outputs.tag }}"
+
+      - name: Build archives + unified checksums
         run: |
           bash scripts/release_checksums.sh --version "${{ steps.ver.outputs.tag }}"
 
       - name: Verify checksums
         run: |
           cd dist
-          # Basic sanity: each listed file exists
-          for f in gittool-v${{ steps.ver.outputs.version }}.tar.gz gittool-v${{ steps.ver.outputs.version }}.zip gittool_${{ steps.ver.outputs.version }}_all.deb gittool-${{ steps.ver.outputs.version }}-1.noarch.rpm; do
-            [ -f "$f" ] || { echo "Missing artifact $f" >&2; exit 1; }
+          # Expected artifacts
+          EXPECT=(
+            "gittool-v${{ steps.ver.outputs.version }}.tar.gz"
+            "gittool-v${{ steps.ver.outputs.version }}.zip"
+            "gittool_${{ steps.ver.outputs.version }}_all.deb"
+            "gittool-${{ steps.ver.outputs.version }}-1.noarch.rpm"
+          )
+          missing=0
+          for f in "${EXPECT[@]}"; do
+            if [ ! -f "$f" ]; then echo "Missing artifact $f" >&2; missing=1; fi
           done
-          # Regenerate and diff
-          shasum -a 256 gittool-v${{ steps.ver.outputs.version }}.tar.gz gittool-v${{ steps.ver.outputs.version }}.zip gittool_${{ steps.ver.outputs.version }}_all.deb gittool-${{ steps.ver.outputs.version }}-1.noarch.rpm > SHA256SUMS.verify
+          [ $missing -eq 0 ] || exit 1
+          # Regenerate verification checksums dynamically from EXPECT list
+          shasum -a 256 "${EXPECT[@]}" > SHA256SUMS.verify
           diff -u <(sort SHA256SUMS) <(sort SHA256SUMS.verify) || { echo "Checksum mismatch" >&2; exit 1; }
           echo "Checksum verification passed"
-
-      - name: Build fpm packages (.deb/.rpm)
-        run: |
-          bash scripts/build_fpm_packages.sh --version "${{ steps.ver.outputs.tag }}"
 
       - name: Extract changelog section
         id: changelog

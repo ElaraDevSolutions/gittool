@@ -44,6 +44,7 @@ ARCHIVE_BASENAME="gittool-${VERSION}"
 ARCHIVE_TGZ="$OUT_DIR/${ARCHIVE_BASENAME}.tar.gz"
 ARCHIVE_ZIP="$OUT_DIR/${ARCHIVE_BASENAME}.zip"
 CHECKSUM_FILE="$OUT_DIR/SHA256SUMS"
+NUM_VERSION="${VERSION#v}"
 
 echo "==> Creating archives for version $VERSION"
 tar -czf "$ARCHIVE_TGZ" -C "$PROJECT_ROOT" install.sh src README.md LICENCE.md || {
@@ -57,14 +58,19 @@ rm -f "$CHECKSUM_FILE"
   shasum -a 256 "$ARCHIVE_TGZ"
   shasum -a 256 "$ARCHIVE_ZIP"
   shasum -a 256 "$PROJECT_ROOT/install.sh"
+  # Include native packages if they were already built
+  if [ -f "$OUT_DIR/gittool_${NUM_VERSION}_all.deb" ]; then
+    shasum -a 256 "$OUT_DIR/gittool_${NUM_VERSION}_all.deb"
+  fi
+  if [ -f "$OUT_DIR/gittool-${NUM_VERSION}-1.noarch.rpm" ]; then
+    shasum -a 256 "$OUT_DIR/gittool-${NUM_VERSION}-1.noarch.rpm"
+  fi
 } > "$CHECKSUM_FILE"
 
 echo "==> Checksums written to $CHECKSUM_FILE"
 echo "==> Example verification:"
 echo "    shasum -a 256 -c <(grep install.sh $CHECKSUM_FILE | sed 's# $PROJECT_ROOT/##')" 
 
-echo "Artifacts:"
-echo "  $ARCHIVE_TGZ"
-echo "  $ARCHIVE_ZIP"
-echo "  $CHECKSUM_FILE"
+echo "Artifacts present in $OUT_DIR:"
+ls -1 "$OUT_DIR" | sed 's/^/  /'
 echo "Done."

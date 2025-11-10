@@ -54,7 +54,8 @@ fi
 echo "==> Building gittool packages version $VERSION"
 DIST_DIR="$PROJECT_ROOT/dist"
 STAGE_DIR="$PROJECT_ROOT/.pkgstage"
-rm -rf "$STAGE_DIR" "$DIST_DIR"
+# Preserve existing dist (may already contain source archives) – only clean staging area.
+rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR/usr/lib/gittool" "$STAGE_DIR/usr/bin" "$STAGE_DIR/usr/share/doc/gittool" "$STAGE_DIR/usr/share/licenses/gittool" "$DIST_DIR"
 
 # Copy scripts
@@ -90,8 +91,7 @@ fpm -t rpm -p "$DIST_DIR/gittool-${VERSION}-1.noarch.rpm" "${FPM_COMMON[@]}"
 echo "==> Packages created:"
 ls -1 "$DIST_DIR"
 
-echo "==> Generating SHA256 checksums"
-(cd "$DIST_DIR" && shasum -a 256 * > SHA256SUMS)
-echo "==> SHA256SUMS:"; cat "$DIST_DIR/SHA256SUMS"
+echo "==> Done creating native packages (.deb/.rpm)"
+echo "NOTE: Combined SHA256SUMS will be generated later by release_checksums.sh after archives are built."
 
-echo "Done. Upload artifacts in $DIST_DIR to the corresponding GitHub Release."
+echo "Done. Packages ready in $DIST_DIR."
