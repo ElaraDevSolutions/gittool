@@ -25,13 +25,19 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 VERSION=""
-for arg in "$@"; do
-  case "$arg" in
-    --version=*) VERSION="${arg#*=}" ;;
+# Parse args supporting both --version X and --version=X
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --version)
+      shift || { echo "Missing value after --version" >&2; exit 1; }
+      VERSION="$1" ;;
+    --version=*)
+      VERSION="${1#*=}" ;;
     -h|--help)
       grep '^#' "$0" | sed 's/^# //' ; exit 0 ;;
-    *) echo "Unknown option: $arg" >&2; exit 1 ;;
+    *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
+  shift || true
 done
 
 if [[ -z "$VERSION" ]]; then

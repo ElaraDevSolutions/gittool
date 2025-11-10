@@ -1,0 +1,19 @@
+# Reproducible packaging environment for gittool
+# Build with: docker build -f Dockerfile.packager -t gittool-packager .
+# Run: docker run --rm -v "$PWD":/workspace -w /workspace gittool-packager bash -c "scripts/build_fpm_packages.sh --version v1.0.8 && scripts/release_checksums.sh --version v1.0.8"
+FROM ruby:3.2-slim
+
+# Install dependencies for fpm (rpm, tar, gzip, zip)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    rpm \
+    zip \
+    build-essential \
+    git \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN gem install --no-document fpm
+
+WORKDIR /workspace
+
+# Default command prints versions
+CMD ["bash", "-c", "ruby -v && fpm --version && rpm --version"]
