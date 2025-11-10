@@ -25,7 +25,10 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 VERSION=""
-# Parse args supporting both --version X and --version=X
+# Robust argument parsing supporting:
+#   --version X
+#   --version=X
+#   -v X
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --version)
@@ -33,12 +36,22 @@ while [[ $# -gt 0 ]]; do
       VERSION="$1" ;;
     --version=*)
       VERSION="${1#*=}" ;;
+    -v)
+      shift || { echo "Missing value after -v" >&2; exit 1; }
+      VERSION="$1" ;;
     -h|--help)
       grep '^#' "$0" | sed 's/^# //' ; exit 0 ;;
-    *) echo "Unknown option: $1" >&2; exit 1 ;;
+    --*)
+      echo "Unknown option: $1" >&2; exit 1 ;;
+    *)
+      # Ignore extra positional args
+      : ;;
   esac
   shift || true
 done
+if [[ -z "$VERSION" && -n "${VERSION:-}" ]]; then
+  echo "DEBUG: VERSION variable unexpectedly empty after parsing." >&2
+fi
 
 if [[ -z "$VERSION" ]]; then
   # Attempt auto-detect via git tags
