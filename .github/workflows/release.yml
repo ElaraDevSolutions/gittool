@@ -1,15 +1,26 @@
 name: Release Packages
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Optional version tag (e.g. v1.2.3). If omitted, a patch bump will be created from latest tag.'
+        required: false
+        default: ''
 
 jobs:
   build-release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          tags: true
 
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
@@ -21,10 +32,33 @@ jobs:
         run: |
           gem install --no-document fpm
 
-      - name: Determine version
+      - name: Determine or create tag
         id: ver
         run: |
-          TAG="${GITHUB_REF##*/}"
+          # If a version was provided via workflow_dispatch input, use it.
+          if [ -n "${{ github.event.inputs.version || '' }}" ]; then
+            TAG="${{ github.event.inputs.version }}"
+            echo "Using provided version: $TAG"
+          else
+            # When triggered by push to main, auto-bump patch from latest tag
+            # Fetch tags ensured by checkout with fetch-depth:0
+            LATEST_TAG=$(git tag --list "v*" --sort=-v:refname | head -n1 || true)
+            if [ -z "$LATEST_TAG" ]; then
+              TAG="v0.1.0"
+            else
+              # strip leading v and split into semver parts
+              ver=${LATEST_TAG#v}
+              IFS='.' read -r major minor patch <<< "$ver"
+              patch=$((patch + 1))
+              TAG="v${major}.${minor}.${patch}"
+            fi
+            echo "Auto-created tag: $TAG"
+            # Create annotated tag and push it
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "Release $TAG"
+            git push origin "$TAG"
+          fi
           VERSION="${TAG#v}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "tag=$TAG" >> $GITHUB_OUTPUT
@@ -32,7 +66,7 @@ jobs:
 
       - name: Build archives + checksums
         run: |
-          bash scripts/release_checksums.sh --version "v${{ steps.ver.outputs.version }}"
+          bash scripts/release_checksums.sh --version "${{ steps.ver.outputs.tag }}"
 
       - name: Verify checksums
         run: |
@@ -48,7 +82,7 @@ jobs:
 
       - name: Build fpm packages (.deb/.rpm)
         run: |
-          bash scripts/build_fpm_packages.sh --version "v${{ steps.ver.outputs.version }}"
+          bash scripts/build_fpm_packages.sh --version "${{ steps.ver.outputs.tag }}"
 
       - name: Extract changelog section
         id: changelog
@@ -73,3 +107,14 @@ jobs:
           body: ${{ steps.changelog.outputs.section }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update Homebrew formula (tap)
+        if: ${{ success() }}
+        env:
+          HOMEBREW_TAP_PAT: ${{ secrets.HOMEBREW_TAP_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: |
+          if [ -z "${HOMEBREW_TAP_PAT}" ]; then
+            echo "Skipping Homebrew tap update: HOMEBREW_TAP_PAT secret not set."; exit 0; fi
+          bash scripts/update_homebrew_formula.sh --version "${{ steps.ver.outputs.tag }}" --commit
