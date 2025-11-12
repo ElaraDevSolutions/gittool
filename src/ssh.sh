@@ -4,6 +4,12 @@ set -euo pipefail
 SSH_DIR="$HOME/.ssh"
 CONFIG_FILE="$SSH_DIR/config"
 
+# Options to force fzf to render inline in the current terminal instead of
+# spawning a new tmux/screen pane or separate window. Users can override via
+# environment variable FZF_INLINE_OPTS if they want a different layout.
+# Example: export FZF_INLINE_OPTS="--height=40% --layout=reverse --border --prompt=Key> "
+FZF_INLINE_OPTS="--height=40% --layout=reverse --border"
+
 # --- Email extraction helpers -------------------------------------------------
 # Extract the IdentityFile path for a given Host alias from the SSH config.
 get_identity_file_for_alias() {
@@ -170,7 +176,7 @@ add_ssh_key() {
 			chosen="${candidates[0]}"
 		else
 			if command -v fzf >/dev/null 2>&1; then
-				chosen="$(printf '%s\n' "${candidates[@]}" | sort | fzf --prompt="Key> ")"
+				chosen="$(printf '%s\n' "${candidates[@]}" | sort | fzf ${FZF_INLINE_OPTS} --prompt="Key> ")"
 			else
 				echo "Multiple matching keys found:" >&2
 				select f in "${candidates[@]}"; do [ -n "$f" ] && chosen="$f" && break; done
@@ -288,7 +294,7 @@ main() {
 				chosen="${aliases[0]}"
 			else
 				if command -v fzf >/dev/null 2>&1; then
-					chosen="$(printf '%s\n' "${aliases[@]}" | sort | fzf --prompt="Alias> ")"
+					chosen="$(printf '%s\n' "${aliases[@]}" | sort | fzf ${FZF_INLINE_OPTS} --prompt="Alias> ")"
 				else
 					echo "Select HostAlias:" >&2
 					select a in "${aliases[@]}"; do [ -n "$a" ] && chosen="$a" && break; done

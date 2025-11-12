@@ -4,6 +4,10 @@ set -euo pipefail
 SSH_CONFIG="$HOME/.ssh/config"
 SSH_HELP_SCRIPT="$(dirname "$0")/ssh.sh"
 
+# Default options to render fzf inline in the current terminal. Can be
+# overridden by exporting FZF_INLINE_OPTS in the environment.
+FZF_INLINE_OPTS="--height=40% --layout=reverse --border"
+
 # --- Email extraction helpers (duplicated from ssh.sh to avoid sourcing execution) ---
 get_identity_file_for_alias() {
   local alias="$1"
@@ -66,7 +70,7 @@ select_host_alias() {
   local aliases=("$@")
   if command -v fzf >/dev/null 2>&1; then
     echo "Select the SSH key to use:" >&2
-    printf '%s\n' "${aliases[@]}" | fzf --prompt="HostAlias> "
+    printf '%s\n' "${aliases[@]}" | fzf ${FZF_INLINE_OPTS} --prompt="HostAlias> "
   else
     echo "Select the SSH key to use:" >&2
     select alias in "${aliases[@]}"; do
