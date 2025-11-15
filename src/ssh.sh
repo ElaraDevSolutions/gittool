@@ -409,6 +409,16 @@ ensure_signing_setup() {
 				new_url="$(echo "$origin" | sed -E "s/^git@[^:]+:/git@${chosen}:/")"
 				git remote set-url origin "$new_url"
 				echo "Rewrote origin -> $new_url"
+				# Update signing key to match selected alias identity
+				local sel_identity
+				sel_identity="$(get_identity_file_for_alias "$chosen" || true)"
+				if [ -n "$sel_identity" ]; then
+					git config --global user.signingkey "$sel_identity" 2>/dev/null || true
+					echo "Set global user.signingkey -> $sel_identity"
+					ensure_signing_setup "$sel_identity" || true
+				else
+					echo "Warning: could not determine IdentityFile for alias '$chosen' to update signing setup" >&2
+				fi
 			;;
 			help|-h) show_help ;;
 			*) echo "Unknown command: $1"; show_help; exit 1 ;;
