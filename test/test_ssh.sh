@@ -46,6 +46,15 @@ function assert_not_grep() {
     report_fail "$msg (pattern '$pattern' unexpectedly found in $file)"
   fi
 }
+# Portable mtime helper (BSD/macOS vs GNU/Linux stat)
+get_mtime() {
+  local f="$1"
+  if stat -f %m "$f" 2>/dev/null; then
+    stat -f %m "$f"
+  else
+    stat -c %Y "$f"
+  fi
+}
 # Isolated HOME
 TEST_HOME="$(mktemp -d)"
 export HOME="$TEST_HOME"
@@ -200,7 +209,7 @@ TESTS_RUN=$((TESTS_RUN+1))
 if [ "$backup_count" -lt 1 ]; then report_fail "Backup file not created during rotation"; fi
 
 # 17: Dry-run rotation should NOT create additional backup
-mtime_before=$(stat -f %m "$ROTATE_KEYFILE")
+mtime_before=$(get_mtime "$ROTATE_KEYFILE")
 set +e
 echo -e "\n\n" | bash "$SSH_SCRIPT" rotate --dry-run "$ROTATE_ALIAS" >/dev/null 2>&1
 rc_rotate_dry=$?
@@ -210,7 +219,7 @@ if [ "$rc_rotate_dry" -ne 0 ]; then report_fail "Dry-run rotate should succeed";
 backup_count_after=$(ls -1 "${ROTATE_KEYFILE}.old-"* 2>/dev/null | wc -l | tr -d ' ')
 TESTS_RUN=$((TESTS_RUN+1))
 if [ "$backup_count_after" -ne "$backup_count" ]; then report_fail "Dry-run should not create new backup"; fi
-mtime_after=$(stat -f %m "$ROTATE_KEYFILE")
+mtime_after=$(get_mtime "$ROTATE_KEYFILE")
 TESTS_RUN=$((TESTS_RUN+1))
 if [ "$mtime_after" -ne "$mtime_before" ]; then report_fail "Dry-run should not modify key file"; fi
 
