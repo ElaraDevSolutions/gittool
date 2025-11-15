@@ -70,6 +70,7 @@ echo "Generated stub key for $EMAIL"
 EOF
 chmod +x "$STUB_BIN/ssh-keygen"
 export PATH="$STUB_BIN:$PATH"
+export GITTOOL_NON_INTERACTIVE=1
 CONFIG_FILE="$HOME/.ssh/config"
 KEY_ALIAS="personal"
 KEYFILE="$HOME/.ssh/id_ed25519_${KEY_ALIAS}"
@@ -181,6 +182,58 @@ EXISTING_KEY_PUB="$HOME/.ssh/id_ed25519_existing.pub"
 assert_grep "IdentityFile ${EXISTING_KEY_PUB%.pub}" "$CONFIG_FILE" "IdentityFile path for existing key with .pub"
 
 ### Final summary and cleanup
+# --- Rotation tests (new) ---------------------------------------------------
+# Setup a fresh alias for rotation tests
+ROTATE_ALIAS="personalrot"
+create_key_and_config "$ROTATE_ALIAS" "rotate@example.com"
+ROTATE_KEYFILE="$HOME/.ssh/id_ed25519_${ROTATE_ALIAS}"
+# 16: Basic rotation (skip agent/sign)
+set +e
+echo -e "\n\n" | bash "$SSH_SCRIPT" rotate --no-agent --no-sign "$ROTATE_ALIAS" >/dev/null 2>&1
+rc_rotate_basic=$?
+set -e
+TESTS_RUN=$((TESTS_RUN+1))
+if [ "$rc_rotate_basic" -ne 0 ]; then report_fail "Basic rotate should succeed"; fi
+# Assert backup exists
+backup_count=$(ls -1 "${ROTATE_KEYFILE}.old-"* 2>/dev/null | wc -l | tr -d ' ')
+TESTS_RUN=$((TESTS_RUN+1))
+if [ "$backup_count" -lt 1 ]; then report_fail "Backup file not created during rotation"; fi
+
+# 17: Dry-run rotation should NOT create additional backup
+mtime_before=$(stat -f %m "$ROTATE_KEYFILE")
+set +e
+echo -e "\n\n" | bash "$SSH_SCRIPT" rotate --dry-run "$ROTATE_ALIAS" >/dev/null 2>&1
+rc_rotate_dry=$?
+set -e
+TESTS_RUN=$((TESTS_RUN+1))
+if [ "$rc_rotate_dry" -ne 0 ]; then report_fail "Dry-run rotate should succeed"; fi
+backup_count_after=$(ls -1 "${ROTATE_KEYFILE}.old-"* 2>/dev/null | wc -l | tr -d ' ')
+TESTS_RUN=$((TESTS_RUN+1))
+if [ "$backup_count_after" -ne "$backup_count" ]; then report_fail "Dry-run should not create new backup"; fi
+mtime_after=$(stat -f %m "$ROTATE_KEYFILE")
+TESTS_RUN=$((TESTS_RUN+1))
+if [ "$mtime_after" -ne "$mtime_before" ]; then report_fail "Dry-run should not modify key file"; fi
+
+# 18: Rotation with --no-sign should not add new key to allowed_signers
+ROTATE_ALIAS2="personalrotsign"
+create_key_and_config "$ROTATE_ALIAS2" "rotsign@example.com"
+ROTATE_KEYFILE2="$HOME/.ssh/id_ed25519_${ROTATE_ALIAS2}"
+allowed_file="$HOME/.config/git/allowed_signers"
+mkdir -p "$(dirname "$allowed_file")"
+pub_old_content="$(cat "${ROTATE_KEYFILE2}.pub")"
+echo "rotsign@example.com $pub_old_content" >> "$allowed_file"
+set +e
+bash "$SSH_SCRIPT" rotate --no-sign --no-agent --email new@example.com "$ROTATE_ALIAS2" >/dev/null 2>&1
+rc_rotate_nosign=$?
+set -e
+TESTS_RUN=$((TESTS_RUN+1))
+if [ "$rc_rotate_nosign" -ne 0 ]; then report_fail "Rotate with --no-sign should succeed"; fi
+new_pub_content="$(cat "${ROTATE_KEYFILE2}.pub")"
+# Allowed_signers should still have old pub content and NOT new pub content
+TESTS_RUN=$((TESTS_RUN+1))
+if ! grep -Fq "$pub_old_content" "$allowed_file"; then report_fail "Old key content should remain in allowed_signers with --no-sign"; fi
+TESTS_RUN=$((TESTS_RUN+1))
+if grep -Fq "$new_pub_content" "$allowed_file"; then report_fail "New key content should not be added with --no-sign"; fi
 echo "Tests run: $TESTS_RUN"
 if [ "$FAILURES" -gt 0 ]; then
   echo "Failures: $FAILURES"

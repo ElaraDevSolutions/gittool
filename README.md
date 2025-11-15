@@ -65,6 +65,7 @@ Common commands:
 | `gt ssh add` | Add a new SSH key and append a Host block to `~/.ssh/config` (interactive). |
 | `gt ssh add <alias-or-pattern>` | Register an existing key whose filename contains the pattern (auto or interactive selection). |
 | `gt ssh remove <HostAlias>` | Remove key files and the Host block for the given HostAlias. |
+| `gt ssh rotate [flags] <HostAlias>` | Rotate (replace) the SSH key for an existing HostAlias (backup & regenerate). |
 | `gt ssh list` | Show Host aliases declared in `~/.ssh/config`. |
 | `gt ssh help` | Show help for the SSH helper. |
 | `gt ssh select` | Interactively pick a configured HostAlias and rewrite the current repo's `origin` remote to use it. |
@@ -88,6 +89,47 @@ The script will prompt for:
 - Email (used as the key comment during generation)
 
 After successful generation the key is stored at `~/.ssh/id_ed25519_<alias>` and a Host block is appended to `~/.ssh/config`.
+
+1.1) Add a key (não-interativo / CI)
+
+Agora é possível criar ou registrar chaves sem prompts usando flags:
+
+```
+gt ssh add --alias pessoal --email user@example.com --hostname github.com
+```
+
+Se a chave ainda não existe, será (ou seria em modo dry-run) gerada em `~/.ssh/id_ed25519_pessoal`.
+
+Registrar chave existente por caminho:
+```
+gt ssh add --path ~/.ssh/id_ed25519_work --alias work --hostname github.com
+```
+
+Registrar por padrão (pattern) buscando em `~/.ssh` (auto se só 1 match):
+```
+gt ssh add --pattern work
+```
+
+Flags suportadas em `add`:
+| Flag | Função |
+|------|--------|
+| `--alias <nome>` | Define o HostAlias (para nova chave ou ao registrar existente). |
+| `--email <email>` | Comentário da chave (obrigatório para geração não-interativa). |
+| `--hostname <h>` | HostName do bloco (default `github.com`). |
+| `--path <arquivo>` | Caminho para chave privada existente. |
+| `--pattern <frag>` | Fragmento para localizar chaves não configuradas. |
+| `--no-agent` | Não executa `ssh-add`. |
+| `--no-sign` | Não altera allowed_signers / configs de assinatura. |
+| `--dry-run` | Apenas mostra ações planejadas. |
+
+Erros comuns:
+* Usar `--alias` sem `--email` ao gerar nova chave (exige email).
+* `--pattern` com múltiplos matches sem `fzf` instalado → aborta solicitando uso de `--path`.
+
+Exemplo dry-run seguro:
+```
+gt ssh add --alias tempkey --email temp@example.com --dry-run
+```
 
 2) Register an existing key by path
 
@@ -163,6 +205,45 @@ Return codes / edge cases:
 * If only one alias exists, it's auto-selected.
 * No changes are made if selection is aborted (ESC/Ctrl-C in `fzf` or empty choice).
 
+8) Rotate an existing key (new)
+
+Use this to periodically replace a key while keeping the same HostAlias (remotes like `git@alias:org/repo.git` keep working):
+
+```
+gt ssh rotate personal
+```
+
+What happens:
+* Backs up current private & public key to `id_ed25519_<alias>.old-<timestamp>`.
+* Prompts for email (defaults to previous key comment or `git config user.email`).
+* Optional passphrase prompt.
+* Generates fresh Ed25519 key at original path.
+* Adds to ssh-agent (unless `--no-agent`).
+* Updates commit signing & allowed_signers (unless `--no-sign`).
+* Removes old key content from `allowed_signers` (unless `--no-sign`).
+
+Flags:
+* `--dry-run`         Show planned actions only (no backups, no key generation).
+* `--no-agent`        Skip `ssh-add`.
+* `--no-sign`         Skip signing setup & allowed_signers adjustments.
+* `--email <address>` Provide new key email non-interactively (CI/automation).
+
+Examples:
+```
+# Preview without touching files
+gt ssh rotate --dry-run personal
+
+# Rotate skipping side-effects
+gt ssh rotate --no-agent --no-sign personal
+
+# Provide a new email non-interactively (then passphrase default answer)
+echo -e "new.email@example.com\n\n" | gt ssh rotate personal
+```
+
+Exit codes: 0 success / dry-run; 1 on errors (missing alias, invalid flag, generation failure).
+
+Why rotate? Reduced exposure window, algorithm migration, enforce periodic hygiene, refresh signing metadata.
+
 ### SSH commit signing automation
 
 Ao adicionar ou selecionar uma chave, o helper tenta configurar assinatura de commits via SSH:
@@ -204,6 +285,7 @@ Example flow (multiple keys configured):
 
 - The `ssh.sh` helper is primarily interactive for the `add` flow. In CI or automation you can pre-generate keys and append Host blocks to `~/.ssh/config` directly (the test suite uses this approach). The helper supports passing an existing key path to `gt ssh add` but it may still prompt for HostName.
 - The helper tolerates `ssh-agent` not being present; `ssh-add` warnings are non-fatal. For CI ensure your runner has the right key permissions (600) and that `~/.ssh` exists.
+- Set environment variable `GITTOOL_NON_INTERACTIVE=1` to suppress email & passphrase prompts during `gt ssh rotate` (it auto reuses previous email and skips passphrase query). This is useful for unattended rotations. For `add`, supplying the needed flags (`--alias`, `--email`, etc.) already avoids prompts.
 
 ## Troubleshooting
 
