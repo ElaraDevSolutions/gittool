@@ -243,6 +243,37 @@ TESTS_RUN=$((TESTS_RUN+1))
 if ! grep -Fq "$pub_old_content" "$allowed_file"; then report_fail "Old key content should remain in allowed_signers with --no-sign"; fi
 TESTS_RUN=$((TESTS_RUN+1))
 if grep -Fq "$new_pub_content" "$allowed_file"; then report_fail "New key content should not be added with --no-sign"; fi
+
+# 19: select updates signingkey and remote
+SEL_ALIAS="selalias"
+create_key_and_config "$SEL_ALIAS" "sel@example.com"
+REPO_DIR="$TEST_HOME/repo_select"
+mkdir -p "$REPO_DIR" && cd "$REPO_DIR"
+git init -q
+git remote add origin git@github.com:owner/project.git
+prev_signing="$(git config --global user.signingkey 2>/dev/null || true)"
+bash "$SSH_SCRIPT" select "$SEL_ALIAS" >/dev/null 2>&1 || report_fail "select command failed"
+TESTS_RUN=$((TESTS_RUN+1))
+new_remote="$(git remote get-url origin)"
+echo "$new_remote" | grep -q "git@${SEL_ALIAS}:owner/project.git" || report_fail "Remote not rewritten correctly on select"
+TESTS_RUN=$((TESTS_RUN+1))
+signing_after="$(git config --global user.signingkey 2>/dev/null || true)"
+expected_identity="$HOME/.ssh/id_ed25519_${SEL_ALIAS}"
+if [ "$signing_after" != "$expected_identity" ]; then report_fail "Signing key not updated by select"; fi
+TESTS_RUN=$((TESTS_RUN+1))
+
+# 20: select with --no-sign leaves signingkey unchanged
+git remote set-url origin git@github.com:owner/project.git
+git config --global --unset user.signingkey || true
+unset_signing="$(git config --global user.signingkey 2>/dev/null || true)"
+TESTS_RUN=$((TESTS_RUN+1))
+bash "$SSH_SCRIPT" select --no-sign "$SEL_ALIAS" >/dev/null 2>&1 || report_fail "select --no-sign failed"
+new_remote2="$(git remote get-url origin)"
+echo "$new_remote2" | grep -q "git@${SEL_ALIAS}:owner/project.git" || report_fail "Remote not rewritten on --no-sign"
+TESTS_RUN=$((TESTS_RUN+1))
+signing_after_nosign="$(git config --global user.signingkey 2>/dev/null || true)"
+if [ -n "$signing_after_nosign" ]; then report_fail "Signing key should remain unset with --no-sign"; fi
+TESTS_RUN=$((TESTS_RUN+1))
 echo "Tests run: $TESTS_RUN"
 if [ "$FAILURES" -gt 0 ]; then
   echo "Failures: $FAILURES"

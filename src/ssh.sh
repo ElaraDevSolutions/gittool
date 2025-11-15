@@ -391,8 +391,20 @@ ensure_signing_setup() {
 				aliases=()
 				while IFS= read -r line; do aliases+=("$line"); done < <(grep -E '^Host[[:space:]]+[^ ]+$' "$CONFIG_FILE" | awk '{print $2}' || true)
 				if [ ${#aliases[@]} -eq 0 ]; then echo "No Host aliases found."; exit 1; fi
+				# Parse optional flags and/or explicit alias argument
+				local DO_SIGN=1 EXPLICIT_ALIAS="" arg
+				while [ $# -gt 0 ]; do
+					case "$1" in
+						--no-sign) DO_SIGN=0; shift ;;
+						-*) echo "Unknown flag for select: $1"; exit 1 ;;
+						*) EXPLICIT_ALIAS="$1"; shift ;;
+					esac
+				done
 				local chosen=""
-				if [ ${#aliases[@]} -eq 1 ]; then chosen="${aliases[0]}"; else
+				if [ -n "$EXPLICIT_ALIAS" ]; then
+					# Validate alias exists
+					if grep -qE "^Host[[:space:]]+${EXPLICIT_ALIAS}$" "$CONFIG_FILE"; then chosen="$EXPLICIT_ALIAS"; else echo "Alias '$EXPLICIT_ALIAS' not found."; exit 1; fi
+				elif [ ${#aliases[@]} -eq 1 ]; then chosen="${aliases[0]}"; else
 					if command -v fzf >/dev/null 2>&1; then
 						chosen="$(printf '%s\n' "${aliases[@]}" | fzf ${FZF_INLINE_OPTS} --prompt="Alias> ")"
 					else
@@ -409,15 +421,19 @@ ensure_signing_setup() {
 				new_url="$(echo "$origin" | sed -E "s/^git@[^:]+:/git@${chosen}:/")"
 				git remote set-url origin "$new_url"
 				echo "Rewrote origin -> $new_url"
-				# Update signing key to match selected alias identity
+				# Determine identity and optionally setup signing
 				local sel_identity
 				sel_identity="$(get_identity_file_for_alias "$chosen" || true)"
 				if [ -n "$sel_identity" ]; then
-					git config --global user.signingkey "$sel_identity" 2>/dev/null || true
-					echo "Set global user.signingkey -> $sel_identity"
-					ensure_signing_setup "$sel_identity" || true
+					if [ $DO_SIGN -eq 1 ]; then
+						git config --global user.signingkey "$sel_identity" 2>/dev/null || true
+						echo "Set global user.signingkey -> $sel_identity"
+						ensure_signing_setup "$sel_identity" || true
+					else
+						echo "(--no-sign) Skipping signing setup/update."
+					fi
 				else
-					echo "Warning: could not determine IdentityFile for alias '$chosen' to update signing setup" >&2
+					echo "Warning: could not determine IdentityFile for alias '$chosen'."
 				fi
 			;;
 			help|-h) show_help ;;
