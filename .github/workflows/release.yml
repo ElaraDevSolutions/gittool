@@ -64,6 +64,27 @@ jobs:
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "Detected version: $VERSION"
 
+      - name: Write VERSION file and commit
+        if: ${{ always() }}
+        run: |
+          VERSION_FILE=VERSION
+          NEW_VERSION="${{ steps.ver.outputs.version }}"
+          echo "Writing version $NEW_VERSION to $VERSION_FILE"
+          # Ensure file exists (checkout used earlier)
+          if [ -f "$VERSION_FILE" ]; then
+            CURR_VERSION=$(cat "$VERSION_FILE" | tr -d '\n' || true)
+          else
+            CURR_VERSION=""
+          fi
+          if [ "$CURR_VERSION" = "$NEW_VERSION" ]; then
+            echo "VERSION already up-to-date ($CURR_VERSION). Skipping commit."
+            exit 0
+          fi
+          echo "$NEW_VERSION" > "$VERSION_FILE"
+          git add "$VERSION_FILE"
+          git commit -m "chore(release): update VERSION to $NEW_VERSION" || echo "No changes to commit"
+          git push origin HEAD:main
+
       - name: Build fpm packages (.deb/.rpm)
         run: |
           bash scripts/build_fpm_packages.sh --version "${{ steps.ver.outputs.tag }}"
