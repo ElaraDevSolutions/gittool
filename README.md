@@ -90,43 +90,43 @@ The script will prompt for:
 
 After successful generation the key is stored at `~/.ssh/id_ed25519_<alias>` and a Host block is appended to `~/.ssh/config`.
 
-1.1) Add a key (não-interativo / CI)
+1.1) Add a key (non-interactive / CI)
 
-Agora é possível criar ou registrar chaves sem prompts usando flags:
+You can create or register keys without prompts by supplying flags:
 
 ```
-gt ssh add --alias pessoal --email user@example.com --hostname github.com
+gt ssh add --alias personal --email user@example.com --hostname github.com
 ```
 
-Se a chave ainda não existe, será (ou seria em modo dry-run) gerada em `~/.ssh/id_ed25519_pessoal`.
+If the key does not exist it will be (or would be, in dry-run) generated at `~/.ssh/id_ed25519_personal`.
 
-Registrar chave existente por caminho:
+Register an existing key by path:
 ```
 gt ssh add --path ~/.ssh/id_ed25519_work --alias work --hostname github.com
 ```
 
-Registrar por padrão (pattern) buscando em `~/.ssh` (auto se só 1 match):
+Register by pattern (searches `~/.ssh`, auto-selects if a single match):
 ```
 gt ssh add --pattern work
 ```
 
-Flags suportadas em `add`:
-| Flag | Função |
-|------|--------|
-| `--alias <nome>` | Define o HostAlias (para nova chave ou ao registrar existente). |
-| `--email <email>` | Comentário da chave (obrigatório para geração não-interativa). |
-| `--hostname <h>` | HostName do bloco (default `github.com`). |
-| `--path <arquivo>` | Caminho para chave privada existente. |
-| `--pattern <frag>` | Fragmento para localizar chaves não configuradas. |
-| `--no-agent` | Não executa `ssh-add`. |
-| `--no-sign` | Não altera allowed_signers / configs de assinatura. |
-| `--dry-run` | Apenas mostra ações planejadas. |
+Flags supported by `add`:
+| Flag | Purpose |
+|------|---------|
+| `--alias <name>` | Set the HostAlias (for new key or when registering existing). |
+| `--email <email>` | Key comment (required for non-interactive generation). |
+| `--hostname <h>` | HostName for the block (default `github.com`). |
+| `--path <file>` | Path to an existing private key. |
+| `--pattern <frag>` | Fragment to locate unconfigured keys. |
+| `--no-agent` | Do not run `ssh-add`. |
+| `--no-sign` | Do not update allowed_signers / signing configs. |
+| `--dry-run` | Show planned actions only. |
 
-Erros comuns:
-* Usar `--alias` sem `--email` ao gerar nova chave (exige email).
-* `--pattern` com múltiplos matches sem `fzf` instalado → aborta solicitando uso de `--path`.
+Common mistakes:
+* Using `--alias` without `--email` when generating a new key (email is required).
+* `--pattern` matching multiple files without `fzf` installed → aborts and asks to use `--path`.
 
-Exemplo dry-run seguro:
+Dry-run example:
 ```
 gt ssh add --alias tempkey --email temp@example.com --dry-run
 ```
@@ -246,22 +246,22 @@ Why rotate? Reduced exposure window, algorithm migration, enforce periodic hygie
 
 ### SSH commit signing automation
 
-Ao adicionar ou selecionar uma chave, o helper tenta configurar assinatura de commits via SSH:
+When adding or selecting a key, the helper attempts to configure SSH commit signing:
 
-1. Cria (se necessário) `~/.config/git/allowed_signers` e adiciona uma linha `email chave_publica` se a chave ainda não estiver presente.
-2. Define `git config --global gpg.ssh.allowedSignersFile ~/.config/git/allowed_signers`.
-3. Ajusta `git config --global user.signingkey` para apontar para o arquivo de chave privada (sem `.pub`).
-4. Comando de verificação: `gt ssh sign-status`.
+1. Creates (if necessary) `~/.config/git/allowed_signers` and adds a line `email public_key_content` if the key is not yet present.
+2. Sets `git config --global gpg.ssh.allowedSignersFile ~/.config/git/allowed_signers`.
+3. Ensures `git config --global user.signingkey` points to the private key file (without `.pub`).
+4. Verification command: `gt ssh sign-status`.
 
-Se o e-mail não puder ser detectado (via `git config user.email` ou comentário da chave `.pub`), será solicitado interativamente.
+If the email cannot be detected (via `git config user.email` or the public key comment), you will be prompted in interactive mode.
 
-Para assinar commits:
+To enable commit signing globally:
 ```bash
 git config --global commit.gpgsign true
-git commit -S -m "feat: exemplo"
+git commit -S -m "feat: example"
 ```
 
-Status rápido:
+Quick check:
 ```bash
 gt ssh sign-status
 ```
@@ -359,12 +359,12 @@ git push
 The script replaces the version in the formula `url` and updates `sha256` to match the new source archive.
 
 ### SSH signing (recap)
-Caso queira configurar manualmente:
+If you want to configure signing manually:
 ```bash
 mkdir -p ~/.config/git
-echo "seu.email@exemplo.com $(cat ~/.ssh/sua-chave.pub)" >> ~/.config/git/allowed_signers
+echo "your.email@example.com $(cat ~/.ssh/your-key.pub)" >> ~/.config/git/allowed_signers
 git config --global gpg.ssh.allowedSignersFile ~/.config/git/allowed_signers
-git config --global user.signingkey /Users/seuuser/.ssh/sua-chave
+git config --global user.signingkey /Users/youruser/.ssh/your-key
 git config --global commit.gpgsign true
 ```
 
