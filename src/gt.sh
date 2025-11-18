@@ -34,13 +34,49 @@ fi
 
 case "$1" in
   -v|-version|--version)
-    # Prefer VERSION file in repo root. If missing or empty, fall back to git.
-    VER_FILE="${SCRIPT_DIR}/../VERSION"
-    if [ -f "$VER_FILE" ] && [ -s "$VER_FILE" ]; then
-      ver="$(cat "$VER_FILE" 2>/dev/null | tr -d '\n' || true)"
-    else
-      # Try to determine version from git tags or short commit
-      ver=""
+    # Look for VERSION file in multiple locations (installed via Homebrew or in-repo)
+    # Allow explicit override using GITTOOL_VERSION_PATH
+    ver=""
+    try_paths=()
+    if [ -n "${GITTOOL_VERSION_PATH:-}" ]; then
+      try_paths+=("${GITTOOL_VERSION_PATH}")
+    fi
+    # Typical layouts:
+    # - running from repo: SCRIPT_DIR/../VERSION
+    # - Homebrew install: SCRIPT_DIR/../libexec/.. or SCRIPT_DIR/../../VERSION depending on install layout
+    try_paths+=("${SCRIPT_DIR}/../VERSION")
+    try_paths+=("${SCRIPT_DIR}/../../VERSION")
+    try_paths+=("/opt/homebrew/opt/gittool/VERSION")
+    try_paths+=("/usr/local/opt/gittool/VERSION")
+    # Try brew --prefix if available
+    if command -v brew >/dev/null 2>&1; then
+      brew_prefix=$(brew --prefix 2>/dev/null || true)
+      if [ -n "$brew_prefix" ]; then
+        try_paths+=("${brew_prefix}/opt/gittool/VERSION")
+      fi
+    fi
+    for p in "${try_paths[@]}"; do
+      if [ -f "$p" ] && [ -s "$p" ]; then
+        ver="$(cat "$p" 2>/dev/null | tr -d '\n' || true)"
+        break
+      fi
+    done
+    # As a last attempt, traverse up from SCRIPT_DIR to find a VERSION file
+    if [ -z "$ver" ]; then
+      curdir="$SCRIPT_DIR"
+      depth=0
+      while [ "$depth" -lt 6 ]; do
+        candidate="$curdir/VERSION"
+        if [ -f "$candidate" ] && [ -s "$candidate" ]; then
+          ver="$(cat "$candidate" 2>/dev/null | tr -d '\n' || true)"
+          break
+        fi
+        curdir="$(dirname "$curdir")"
+        depth=$((depth + 1))
+      done
+    fi
+    # If not found in files, fall back to git detection
+    if [ -z "$ver" ]; then
       if [ -d "${SCRIPT_DIR}/.." ] && [ -d "${SCRIPT_DIR}/../.git" ] && command -v git >/dev/null 2>&1; then
         ver="$(git -C "${SCRIPT_DIR}/.." describe --tags --abbrev=0 2>/dev/null || true)"
         if [ -z "$ver" ]; then
