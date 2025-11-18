@@ -48,6 +48,8 @@ case "$1" in
     try_paths+=("${SCRIPT_DIR}/../../VERSION")
     try_paths+=("/opt/homebrew/opt/gittool/VERSION")
     try_paths+=("/usr/local/opt/gittool/VERSION")
+    try_paths+=("/opt/homebrew/opt/gt/VERSION")
+    try_paths+=("/usr/local/opt/gt/VERSION")
     # Try brew --prefix if available
     if command -v brew >/dev/null 2>&1; then
       brew_prefix=$(brew --prefix 2>/dev/null || true)
