@@ -22,6 +22,7 @@ Usage:
   gt ssh <cmd> [args...]      # Call the SSH helper (ssh.sh)
   gt <git_command> [...]      # Call the Git helper (git.sh)
   gt help                     # Show this message
+  gt -v | -version | --version  # Show gt version
 EOF
 }
 
@@ -32,6 +33,26 @@ if [ "$#" -eq 0 ]; then
 fi
 
 case "$1" in
+  -v|-version|--version)
+    # Try to determine version from git tags, VERSION file, or fallback
+    if [ -d "${SCRIPT_DIR}/.." ] && [ -d "${SCRIPT_DIR}/../.git" ]; then
+      # If git is available, prefer annotated tag or short commit
+      if command -v git >/dev/null 2>&1; then
+        ver="$(git -C "${SCRIPT_DIR}/.." describe --tags --abbrev=0 2>/dev/null || true)"
+        if [ -z "$ver" ]; then
+          ver="$(git -C "${SCRIPT_DIR}/.." rev-parse --short HEAD 2>/dev/null || true)"
+        fi
+      fi
+    fi
+    # If not found via git, try VERSION file
+    if [ -z "${ver:-}" ] && [ -f "${SCRIPT_DIR}/../VERSION" ]; then
+      ver="$(cat "${SCRIPT_DIR}/../VERSION" 2>/dev/null || true)"
+    fi
+    # Default
+    ver="${ver:-v0.0.0}"
+    echo "$ver"
+    exit 0
+    ;;
   ssh|ssh.sh)
     shift || true
     if [ ! -x "$SSH_SCRIPT" ]; then
