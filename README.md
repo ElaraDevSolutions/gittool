@@ -339,7 +339,6 @@ Manual scripts (under `scripts/`):
 | `release_checksums.sh` | Create `tar.gz`, `zip`, and `SHA256SUMS`. |
 | `build_fpm_packages.sh` | Generate `.deb` and `.rpm` using `fpm`. |
 | `sign_release.sh` | GPG sign artifacts (optional). |
-| `update_homebrew_formula.sh` | Update external Homebrew tap formula with version + sha256. |
 
 ### Updating the Homebrew tap (external repo)
 
@@ -347,14 +346,6 @@ Assuming sibling repo layout:
 ```
 gittool/
 homebrew-tools/
-```
-Run a release, then:
-```
-bash scripts/update_homebrew_formula.sh --version vX.Y.Z
-cd ../homebrew-tools
-git add Formula/gt.rb
-git commit -m "gt: update to vX.Y.Z"
-git push
 ```
 The script replaces the version in the formula `url` and updates `sha256` to match the new source archive.
 

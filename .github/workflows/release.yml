@@ -136,14 +136,3 @@ jobs:
           body: ${{ steps.changelog.outputs.section }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Update Homebrew formula (tap)
-        if: ${{ success() }}
-        env:
-          HOMEBREW_TAP_PAT: ${{ secrets.HOMEBREW_TAP_PAT }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_ACTOR: ${{ github.actor }}
-        run: |
-          if [ -z "${HOMEBREW_TAP_PAT}" ]; then
-            echo "Skipping Homebrew tap update: HOMEBREW_TAP_PAT secret not set."; exit 0; fi
-          bash scripts/update_homebrew_formula.sh --version "${{ steps.ver.outputs.tag }}" --commit
