@@ -128,6 +128,15 @@ case "$1" in
     echo "$ver"
     exit 0
     ;;
+  doctor)
+    shift || true
+    DOCTOR_SCRIPT="$SCRIPT_DIR/doctor.sh"
+    if [ ! -x "$DOCTOR_SCRIPT" ]; then
+      echo "Error: doctor.sh not found at $DOCTOR_SCRIPT" >&2
+      exit 1
+    fi
+    exec bash "$DOCTOR_SCRIPT" "$@"
+    ;;
   ssh|ssh.sh)
     shift || true
     if [ ! -x "$SSH_SCRIPT" ]; then

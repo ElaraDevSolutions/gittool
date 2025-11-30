@@ -14,6 +14,7 @@ Commands (shortcuts):
   list   (-l)                     List configured Host aliases.
   select                          Rewrite current repo origin to chosen HostAlias.
   sign-status                     Show if signing key is in allowed_signers.
+	show   (-s) <HostAlias>         Show details about a configured SSH key.
   help   (-h)                     Show this help.
 
 Rotate flags:
@@ -46,6 +47,153 @@ get_identity_file_for_alias() {
 	[ -f "$CONFIG_FILE" ] || return 1
 	identity="$(awk -v target="$alias" '/^Host[[:space:]]+/ { in_block = ($2 == target); next } in_block && /^[[:space:]]*IdentityFile[[:space:]]+/ { print $2; exit }' "$CONFIG_FILE" || true)"
 	[ -n "$identity" ] && printf '%s' "$identity"
+}
+
+show_ssh_key_details() {
+	local HOST_ALIAS="$1"
+	ensure_ssh_dir_and_config
+	if [ -z "$HOST_ALIAS" ]; then
+		echo "Usage: ssh.sh show <HostAlias>" >&2
+		return 1
+	fi
+	if ! grep -qE "^Host[[:space:]]+${HOST_ALIAS}$" "$CONFIG_FILE" 2>/dev/null; then
+		echo "Host '${HOST_ALIAS}' not found in $CONFIG_FILE." >&2
+		return 1
+	fi
+
+	# Extract SSH config block fields
+	local hostname user identity_file
+	hostname="$(awk -v target="$HOST_ALIAS" '
+		/^Host[[:space:]]+/ { in_block = ($2 == target); next }
+		in_block && /^[[:space:]]*HostName[[:space:]]+/ { print $2; next }
+		in_block && /^[[:space:]]*User[[:space:]]+/ { print $2; next }
+		in_block && /^[[:space:]]*IdentityFile[[:space:]]+/ { print $2; next }
+	' "$CONFIG_FILE" 2>/dev/null | paste -sd' ' - || true)"
+	# hostname user identity
+	set -- $hostname
+	hostname="${1:-}"
+	user="${2:-}"
+	identity_file="${3:-}"
+	[ -z "$identity_file" ] && identity_file="$(get_identity_file_for_alias "$HOST_ALIAS" || true)"
+
+	local identity_abs
+	identity_abs="$identity_file"
+	if [ -n "$identity_abs" ] && [ "${identity_abs#~/}" != "$identity_abs" ]; then
+		identity_abs="$HOME/${identity_abs#~/}"
+	fi
+
+	echo "HostAlias: $HOST_ALIAS"
+	echo "  Config file: $CONFIG_FILE"
+	echo
+	echo "SSH config:"
+	echo "  HostName      ${hostname:-<unset>}"
+	echo "  User          ${user:-<unset>}"
+	echo "  IdentityFile  ${identity_file:-<unset>}"
+
+	local in_agent="unknown"
+	if [ -n "$identity_abs" ] && command -v ssh-add >/dev/null 2>&1; then
+		if ssh-add -L 2>/dev/null | grep -Fq "$identity_abs" 2>/dev/null; then
+			in_agent="yes"
+		else
+			in_agent="no"
+		fi
+	fi
+	echo "  In ssh-agent  $in_agent"
+
+	echo
+	echo "Key details:"
+	if [ -z "$identity_abs" ]; then
+		echo "  IdentityFile not resolved."
+	else
+		echo "  Key file      $identity_abs"
+		local pub_file="$identity_abs.pub"
+		if [ -f "$pub_file" ]; then
+			echo "  Public key    $pub_file"
+			local key_type="" fingerprint="" email="" created_at="" age_days=""
+			key_type="$(cut -d' ' -f1 "$pub_file" 2>/dev/null || true)"
+			if command -v ssh-keygen >/dev/null 2>&1; then
+				fingerprint="$(ssh-keygen -lf "$pub_file" 2>/dev/null | awk '{print $2" "$3}' || true)"
+			fi
+			email="$(extract_email_from_pub "$pub_file" 2>/dev/null || true)"
+			if [ -n "$email" ]; then
+				:
+			else
+				email="<unknown>"
+			fi
+			if stat -f '%Sm' -t '%Y-%m-%d %H:%M:%S' "$identity_abs" >/dev/null 2>&1; then
+				created_at="$(stat -f '%Sm' -t '%Y-%m-%d %H:%M:%S' "$identity_abs" 2>/dev/null || true)"
+				# Compute age in days in a POSIX-safe way without nested $(( ))
+				local now_ts mtime_ts diff_ts
+				now_ts="$(date +%s 2>/dev/null || echo 0)"
+				mtime_ts="$(stat -f '%m' "$identity_abs" 2>/dev/null || echo 0)"
+				if [ -n "$now_ts" ] && [ -n "$mtime_ts" ]; then
+					diff_ts=$(( now_ts - mtime_ts ))
+					age_days=$(( diff_ts / 86400 ))
+				fi
+			fi
+			echo "  Type          ${key_type:-<unknown>}"
+			echo "  Fingerprint   ${fingerprint:-<unknown>}"
+			echo "  Created at    ${created_at:-<unknown>}"
+			echo "  Age           ${age_days:-<unknown>} days"
+			echo "  Email         $email"
+		else
+			echo "  Public key    $pub_file (missing)"
+		fi
+	fi
+
+	echo
+	echo "Git & signing:"
+	local cwd
+	cwd="$(pwd)"
+	if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+		local repo_root origin_url
+		repo_root="$(git rev-parse --show-toplevel 2>/dev/null || echo "$cwd")"
+		origin_url="$(git remote get-url origin 2>/dev/null || true)"
+		echo "  Local repo    $repo_root"
+		if [ -n "$origin_url" ]; then
+			echo "  origin remote $origin_url"
+			if echo "$origin_url" | grep -qE "^git@${HOST_ALIAS}:"; then
+				echo "  origin uses   this HostAlias: yes"
+			else
+				echo "  origin uses   this HostAlias: no"
+			fi
+		else
+			echo "  origin remote <none>"
+		fi
+		local local_email
+		local_email="$(git config user.email 2>/dev/null || true)"
+		[ -n "$local_email" ] && echo "  user.email   (local)  $local_email"
+	else
+		echo "  Local repo    <none> (not in a git work tree)"
+	fi
+	local global_email signing_key allowed_file="$HOME/.config/git/allowed_signers"
+	global_email="$(git config --global user.email 2>/dev/null || true)"
+	[ -n "$global_email" ] && echo "  user.email  (global)  $global_email"
+	signing_key="$(git config --global user.signingkey 2>/dev/null || true)"
+	if [ -n "$signing_key" ]; then
+		local matches="no"
+		if [ -n "$identity_abs" ] && [ "$signing_key" = "$identity_abs" ]; then
+			matches="yes"
+		fi
+		echo "  signingkey    $signing_key (matches: $matches)"
+	else
+		echo "  signingkey    <unset>"
+	fi
+	if [ -f "$allowed_file" ] && [ -n "$identity_abs" ] && [ -f "${identity_abs}.pub" ]; then
+		if grep -Fq "$(cat "${identity_abs}.pub" 2>/dev/null || true)" "$allowed_file" 2>/dev/null; then
+			echo "  allowed_signers: present ($allowed_file)"
+		else
+			echo "  allowed_signers: not present ($allowed_file)"
+		fi
+	else
+		echo "  allowed_signers: file not found or key missing ($allowed_file)"
+	fi
+
+	echo
+	# Simple hint on age if known
+	if [ -n "${age_days:-}" ] && [ "${age_days:-0}" -ge 180 ]; then
+		echo "Hint: key is older than 180 days. Consider: gt ssh rotate $HOST_ALIAS"
+	fi
 }
 
 rotate_ssh_key() {
@@ -85,17 +233,17 @@ rotate_ssh_key() {
 		if [ -n "${GITTOOL_NON_INTERACTIVE:-}" ] || [ ! -t 0 ]; then
 			email="$prev_email"
 		else
-			read -p "Email para nova chave (enter para reutilizar '${prev_email}'): " email || true
+			read -p "Email for new key (enter to reuse '${prev_email}'): " email || true
 		fi
 	fi
 	[ -z "$email" ] && email="$prev_email"
-	if [ -z "$email" ]; then echo "Email não fornecido. Abortando."; [ $DRY_RUN -eq 0 ] && {
+	if [ -z "$email" ]; then echo "Email not provided. Aborting."; [ $DRY_RUN -eq 0 ] && {
 		[ -f "${old_priv}.${backup_suffix}" ] && mv "${old_priv}.${backup_suffix}" "$old_priv" || true
 		[ -f "${old_pub}.${backup_suffix}" ] && mv "${old_pub}.${backup_suffix}" "$old_pub" || true
 	}; return 1; fi
 	local pass_flag="-N ''"
 	if [ -z "${GITTOOL_NON_INTERACTIVE:-}" ] && [ -t 0 ]; then
-		read -p "Adicionar passphrase? [y/N]: " add_pass || true
+		read -p "Add passphrase? [y/N]: " add_pass || true
 		case "$add_pass" in [yY]|[yY][eE][sS]) pass_flag="" ;; esac
 	fi
 	if [ $DRY_RUN -eq 1 ]; then
@@ -112,7 +260,7 @@ rotate_ssh_key() {
 		return 1
 	fi
 	chmod 600 "$identity_file" 2>/dev/null || true
-	if [ $DO_AGENT -eq 1 ]; then ssh-add "$identity_file" 2>/dev/null || echo "Aviso: ssh-add falhou (continuando)" >&2; else echo "(--no-agent) Skipping ssh-add."; fi
+	if [ $DO_AGENT -eq 1 ]; then ssh-add "$identity_file" 2>/dev/null || echo "Warning: ssh-add failed (continuing)" >&2; else echo "(--no-agent) Skipping ssh-add."; fi
 	local allowed_file="$HOME/.config/git/allowed_signers"
 	if [ $DO_SIGN -eq 1 ]; then
 		if [ -n "$old_pub_content" ] && [ -f "$allowed_file" ] && grep -Fq "$old_pub_content" "$allowed_file"; then
@@ -122,7 +270,7 @@ rotate_ssh_key() {
 	else
 		echo "(--no-sign) Skipping signing setup.";
 	fi
-	echo "Rotação concluída para alias '$HOST_ALIAS'."
+	echo "Rotation completed for alias '$HOST_ALIAS'."
 }
 
 list_host_aliases() {
@@ -383,6 +531,7 @@ ensure_signing_setup() {
 			rotate|-R) shift || true; rotate_ssh_key "$@" ;;
 			list|-l) list_host_aliases ;;
 			sign-status) sign_status ;;
+			show|-s) shift || true; show_ssh_key_details "${1:-}" ;;
 			select)
 				shift || true
 				ensure_ssh_dir_and_config
