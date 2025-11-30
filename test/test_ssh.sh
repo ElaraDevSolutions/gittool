@@ -274,6 +274,34 @@ TESTS_RUN=$((TESTS_RUN+1))
 signing_after_nosign="$(git config --global user.signingkey 2>/dev/null || true)"
 if [ -n "$signing_after_nosign" ]; then report_fail "Signing key should remain unset with --no-sign"; fi
 TESTS_RUN=$((TESTS_RUN+1))
+
+# 21: show prints details for existing HostAlias
+cd "$TEST_HOME"
+SHOW_ALIAS="showalias"
+create_key_and_config "$SHOW_ALIAS" "show@example.com"
+set +e
+show_out=$(bash "$SSH_SCRIPT" show "$SHOW_ALIAS" 2>&1)
+rc_show=$?
+set -e
+TESTS_RUN=$((TESTS_RUN+1))
+if [ "$rc_show" -ne 0 ]; then
+  report_fail "ssh show should exit 0 for existing alias"
+fi
+echo "$show_out" | grep -q "HostAlias: $SHOW_ALIAS" || report_fail "ssh show should print HostAlias header"
+echo "$show_out" | grep -q "Key details:" || report_fail "ssh show should print key details section"
+echo "$show_out" | grep -q "Git & signing:" || report_fail "ssh show should print git & signing section"
+
+# 22: show fails for missing alias
+set +e
+show_out_missing=$(bash "$SSH_SCRIPT" show missing-alias 2>&1)
+rc_show_missing=$?
+set -e
+TESTS_RUN=$((TESTS_RUN+1))
+if [ "$rc_show_missing" -eq 0 ]; then
+  report_fail "ssh show should exit non-zero for missing alias"
+fi
+echo "$show_out_missing" | grep -q "not found in" || report_fail "ssh show missing alias should mention not found"
+
 echo "Tests run: $TESTS_RUN"
 if [ "$FAILURES" -gt 0 ]; then
   echo "Failures: $FAILURES"

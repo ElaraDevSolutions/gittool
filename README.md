@@ -67,9 +67,11 @@ Common commands:
 | `gt ssh remove <HostAlias>` | Remove key files and the Host block for the given HostAlias. |
 | `gt ssh rotate [flags] <HostAlias>` | Rotate (replace) the SSH key for an existing HostAlias (backup & regenerate). |
 | `gt ssh list` | Show Host aliases declared in `~/.ssh/config`. |
+| `gt ssh show <HostAlias>` / `gt ssh -s <HostAlias>` | Show detailed information about a configured HostAlias and its key. |
 | `gt ssh help` | Show help for the SSH helper. |
 | `gt ssh select` | Interactively pick a configured HostAlias and rewrite the current repo's `origin` remote to use it. |
 | `gt clone <SSH-link>` | Clone using a selected HostAlias (replaces the host in the SSH link). |
+| `gt doctor` | Run basic diagnostics on your Git, SSH, and gittool setup. |
 
 The `gt` dispatcher forwards `gt ssh ...` to the `ssh.sh` helper in the installation directory. For normal Git commands `gt` simply forwards to `git`.
 
@@ -164,6 +166,21 @@ Notes:
 gt ssh list
 
 This prints a short list of Host aliases found in `~/.ssh/config`.
+
+4.1) Show details for a configured HostAlias (new)
+
+Use this to inspect the SSH and Git context for a specific HostAlias:
+
+```bash
+gt ssh show personal
+# or
+gt ssh -s personal
+```
+
+It prints:
+- Basic SSH config for that alias (HostName, User, IdentityFile, whether the key is loaded in ssh-agent).
+- Key metadata (type, fingerprint, creation time, age in days, email from the public key comment).
+- Git/signing context (current repo and origin, whether origin uses this HostAlias, local/global user.email, user.signingkey match, and allowed_signers status).
 
 5) Remove a key and its Host block
 
@@ -286,6 +303,25 @@ Example flow (multiple keys configured):
 - The `ssh.sh` helper is primarily interactive for the `add` flow. In CI or automation you can pre-generate keys and append Host blocks to `~/.ssh/config` directly (the test suite uses this approach). The helper supports passing an existing key path to `gt ssh add` but it may still prompt for HostName.
 - The helper tolerates `ssh-agent` not being present; `ssh-add` warnings are non-fatal. For CI ensure your runner has the right key permissions (600) and that `~/.ssh` exists.
 - Set environment variable `GITTOOL_NON_INTERACTIVE=1` to suppress email & passphrase prompts during `gt ssh rotate` (it auto reuses previous email and skips passphrase query). This is useful for unattended rotations. For `add`, supplying the needed flags (`--alias`, `--email`, etc.) already avoids prompts.
+
+### Doctor command
+
+Use `gt doctor` for a quick health check of your environment:
+
+```bash
+gt doctor
+gt doctor --ssh-only
+gt doctor --git-only
+gt doctor --alias personal
+```
+
+What it checks:
+- Environment: presence of `git`, `ssh`, `ssh-agent`, `fzf`.
+- SSH config: `~/.ssh`, `~/.ssh/config`, and configured `Host` aliases.
+- SSH signing & Git config: `allowed_signers`, `gpg.ssh.allowedSignersFile`, `user.signingkey`, `user.email`.
+- Current repository (when inside a Git work tree): repo root, `origin` URL, SSH vs HTTPS, `user.email`, `commit.gpgsign`.
+
+With `--alias <HostAlias>`, it appends the detailed view from `gt ssh show <HostAlias>` to the report so you can inspect one alias in depth.
 
 ## Troubleshooting
 
