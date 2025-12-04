@@ -6,6 +6,8 @@ set -euo pipefail
 
 GITTOOL_CONFIG_DIR="${GITTOOL_CONFIG_DIR:-$HOME/.gittool}"
 VAULT_DIR="$GITTOOL_CONFIG_DIR/vault"
+GITTOOL_CFG_ROOT="${GITTOOL_CFG_ROOT:-$HOME/.config/gittool}"
+GITTOOL_CFG_FILE="$GITTOOL_CFG_ROOT/config"
 
 usage() {
 	cat <<EOF
@@ -20,6 +22,43 @@ EOF
 
 ensure_vault_dir() {
 	mkdir -p "$VAULT_DIR"
+}
+
+write_local_vault_config() {
+	# Persist local vault provider configuration to ~/.config/gittool/config
+	# Format (single local provider, always overwritten on init):
+	# [vault]
+	# provider=local
+	# path=/absolute/path/to/vault-XXXX.gpg
+	local master_file="$1"
+
+	mkdir -p "$GITTOOL_CFG_ROOT"
+
+	# Preserve any non-[vault] content by filtering existing file, then append new block
+	local tmp
+	tmp="$(mktemp)"
+	if [ -f "$GITTOOL_CFG_FILE" ]; then
+		# Drop existing [vault] block (very simple: remove lines from [vault] until next [section])
+		awk '
+			BEGIN { in_vault=0 }
+			/^[[]vault[]]/ { in_vault=1; next }
+			/^[[][^]]+[]]/ { in_vault=0 }
+			in_vault==0 { print }
+		' "$GITTOOL_CFG_FILE" >"$tmp" 2>/dev/null || cp "$GITTOOL_CFG_FILE" "$tmp" 2>/dev/null || true
+	else
+		: >"$tmp"
+	fi
+
+	{
+		cat "$tmp"
+		# Ensure a trailing newline before appending new block
+		echo ""
+		echo "[vault]"
+		echo "provider=local"
+		echo "path=$master_file"
+	} >"$GITTOOL_CFG_FILE"
+
+	rm -f "$tmp" 2>/dev/null || true
 }
 
 vault_init() {
@@ -146,6 +185,9 @@ EOF
 		echo "Error: failed to create encrypted master password file." >&2
 		exit 1
 	fi
+
+	# Persist/refresh local provider configuration for the vault
+	write_local_vault_config "$master_file"
 
 	echo "Vault initialized at $master_file" >&2
 }

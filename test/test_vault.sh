@@ -44,9 +44,12 @@ GITTOOL_CONFIG_DIR="$HOME/.gittool"
 export GITTOOL_CONFIG_DIR
 
 VAULT_DIR="$GITTOOL_CONFIG_DIR/vault"
+CFG_ROOT="$HOME/.config/gittool"
+CFG_FILE="$CFG_ROOT/config"
 
 clean_vault() {
   rm -rf "$VAULT_DIR" || true
+  rm -rf "$CFG_ROOT" || true
 }
 
 run_init_with_empty() {
@@ -98,6 +101,29 @@ KEY_COUNT="$(gpg --list-keys --with-colons 2>/dev/null | awk -F: '/^pub/ {count+
 TESTS_RUN=$((TESTS_RUN+1))
 if [ "$KEY_COUNT" -lt 1 ]; then
   report_fail "vault init should generate at least one GPG public key when none exists"
+fi
+
+# --- Test 4: init should write/update local provider config ---
+clean_vault
+run_init_with_empty
+TESTS_RUN=$((TESTS_RUN+1))
+if [ ! -f "$CFG_FILE" ]; then
+  report_fail "vault init should create ~/.config/gittool/config with [vault] provider"
+else
+  # There should be exactly one [vault] block and a matching path line
+  vault_count="$(grep -c '^[[]vault[]]' "$CFG_FILE" 2>/dev/null || echo 0)"
+  if [ "$vault_count" -ne 1 ]; then
+    report_fail "vault config should contain exactly one [vault] section (got $vault_count)"
+  fi
+  path_line="$(grep '^path=' "$CFG_FILE" 2>/dev/null || true)"
+  if [ -z "$path_line" ]; then
+    report_fail "vault config should contain a path= line for the local provider"
+  else
+    vault_file="${path_line#path=}"
+    if [ ! -f "$vault_file" ]; then
+      report_fail "vault config path should point to an existing vault file ($vault_file)"
+    fi
+  fi
 fi
 clean_vault
 
