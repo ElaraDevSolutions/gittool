@@ -30,21 +30,37 @@ write_local_vault_config() {
 	# [vault]
 	# provider=local
 	# path=/absolute/path/to/vault-XXXX.gpg
+	# ssh_hosts=comma,separated,host,aliases
 	local master_file="$1"
 
 	mkdir -p "$GITTOOL_CFG_ROOT"
 
+	local existing_ssh_hosts=""
+	local original_tmp
+	original_tmp="$(mktemp)"
+	if [ -f "$GITTOOL_CFG_FILE" ]; then
+		cp "$GITTOOL_CFG_FILE" "$original_tmp" 2>/dev/null || :
+		# Extract ssh_hosts only from the existing [vault] block
+		existing_ssh_hosts="$(
+			awk '
+				BEGIN { in_vault=0 }
+				/^[[]vault[]]/ { in_vault=1; next }
+				/^[[][^]]+[]]/ { in_vault=0 }
+				in_vault==1 && /^ssh_hosts=/ { print; exit }
+			' "$original_tmp" 2>/dev/null || true
+		)"
+	fi
+
 	# Preserve any non-[vault] content by filtering existing file, then append new block
 	local tmp
 	tmp="$(mktemp)"
-	if [ -f "$GITTOOL_CFG_FILE" ]; then
-		# Drop existing [vault] block (very simple: remove lines from [vault] until next [section])
+	if [ -f "$original_tmp" ]; then
 		awk '
 			BEGIN { in_vault=0 }
 			/^[[]vault[]]/ { in_vault=1; next }
 			/^[[][^]]+[]]/ { in_vault=0 }
 			in_vault==0 { print }
-		' "$GITTOOL_CFG_FILE" >"$tmp" 2>/dev/null || cp "$GITTOOL_CFG_FILE" "$tmp" 2>/dev/null || true
+		' "$original_tmp" >"$tmp" 2>/dev/null || cp "$original_tmp" "$tmp" 2>/dev/null || true
 	else
 		: >"$tmp"
 	fi
@@ -56,9 +72,11 @@ write_local_vault_config() {
 		echo "[vault]"
 		echo "provider=local"
 		echo "path=$master_file"
+		# Preserve existing ssh_hosts mapping if present
+		[ -n "$existing_ssh_hosts" ] && echo "$existing_ssh_hosts"
 	} >"$GITTOOL_CFG_FILE"
 
-	rm -f "$tmp" 2>/dev/null || true
+	rm -f "$tmp" "$original_tmp" 2>/dev/null || true
 }
 
 vault_init() {

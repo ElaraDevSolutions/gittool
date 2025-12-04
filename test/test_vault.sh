@@ -127,6 +127,31 @@ else
 fi
 clean_vault
 
+# --- Test 5: ssh_hosts line should be preserved inside [vault] across re-init ---
+clean_vault
+# Simulate an existing config created by ssh integration, before vault init runs
+mkdir -p "$(dirname "$CFG_FILE")"
+{
+  printf '%s\n' "[vault]"
+  printf '%s\n' "provider=local"
+  printf '%s\n' "path=/tmp/dummy"
+  printf '%s\n' "ssh_hosts=empresa-ssh,pessoal-ssh"
+} >"$CFG_FILE"
+FIRST_CONTENT="$(cat "$CFG_FILE")"
+TESTS_RUN=$((TESTS_RUN+1))
+if ! echo "$FIRST_CONTENT" | grep -q '^ssh_hosts=empresa-ssh,pessoal-ssh'; then
+  report_fail "ssh_hosts line should be present after manual insertion in [vault] section"
+fi
+
+# Run init (which rewrites [vault]) and ensure ssh_hosts line is still present
+printf '\n\n' | bash "$VAULT_SCRIPT" init >/dev/null 2>&1
+SECOND_CONTENT="$(cat "$CFG_FILE")"
+TESTS_RUN=$((TESTS_RUN+1))
+if ! echo "$SECOND_CONTENT" | grep -q '^ssh_hosts=empresa-ssh,pessoal-ssh'; then
+  report_fail "vault init should preserve existing ssh_hosts mapping in [vault] section"
+fi
+clean_vault
+
 # Final summary
 if [ "$FAILURES" -ne 0 ]; then
   echo "vault.sh tests: $FAILURES failures out of $TESTS_RUN checks" >&2
