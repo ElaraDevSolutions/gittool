@@ -14,12 +14,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Paths to helper scripts
 GIT_SCRIPT="$SCRIPT_DIR/git.sh"
 SSH_SCRIPT="$SCRIPT_DIR/ssh.sh"
+VAULT_SCRIPT="$SCRIPT_DIR/vault.sh"
 
 # --- Usage message ---
 usage() {
   cat <<EOF
 Usage:
   gt ssh <cmd> [args...]      # Call the SSH helper (ssh.sh)
+  gt vault <cmd> [args...]    # Call the Vault helper (vault.sh)
   gt <git_command> [...]      # Call the Git helper (git.sh)
   gt help                     # Show this message
   gt -v | -version | --version  # Show gt version
@@ -144,6 +146,14 @@ case "$1" in
       exit 1
     fi
     exec bash "$SSH_SCRIPT" "$@"
+    ;;
+  vault|vault.sh)
+    shift || true
+    if [ ! -x "$VAULT_SCRIPT" ]; then
+      echo "Error: vault.sh not found at $VAULT_SCRIPT" >&2
+      exit 1
+    fi
+    exec bash "$VAULT_SCRIPT" "$@"
     ;;
   help|-h|--help)
     usage
