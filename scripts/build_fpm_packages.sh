@@ -14,7 +14,7 @@
 #   dist/gittool-<version>-1.noarch.rpm (name may vary by fpm defaults)
 #
 # Package contents layout:
-#   /usr/lib/gittool/{gt.sh,git.sh,ssh.sh}
+#   /usr/lib/gittool/{gt.sh,git.sh,ssh.sh,vault.sh,doctor.sh}
 #   /usr/bin/gt (wrapper)
 #   /usr/share/doc/gittool/README.md
 #   /usr/share/licenses/gittool/LICENCE.md
@@ -77,8 +77,13 @@ STAGE_DIR="$PROJECT_ROOT/.pkgstage"
 rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR/usr/lib/gittool" "$STAGE_DIR/usr/bin" "$STAGE_DIR/usr/share/doc/gittool" "$STAGE_DIR/usr/share/licenses/gittool" "$DIST_DIR"
 
-# Copy scripts
-cp "$PROJECT_ROOT/src/gt.sh" "$PROJECT_ROOT/src/git.sh" "$PROJECT_ROOT/src/ssh.sh" "$STAGE_DIR/usr/lib/gittool/"
+# Copy scripts (keep in sync with src/ helpers used by gt.sh)
+cp "$PROJECT_ROOT/src/gt.sh" \
+  "$PROJECT_ROOT/src/git.sh" \
+  "$PROJECT_ROOT/src/ssh.sh" \
+  "$PROJECT_ROOT/src/vault.sh" \
+  "$PROJECT_ROOT/src/doctor.sh" \
+  "$STAGE_DIR/usr/lib/gittool/"
 chmod 0755 "$STAGE_DIR/usr/lib/gittool"/*.sh
 
 # Wrapper
