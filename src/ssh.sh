@@ -5,6 +5,57 @@ SSH_DIR="$HOME/.ssh"
 CONFIG_FILE="$SSH_DIR/config"
 FZF_INLINE_OPTS="--height=40% --layout=reverse --border"
 
+GITTOOL_CFG_ROOT="${XDG_CONFIG_HOME:-$HOME/.config}/gittool"
+GITTOOL_CFG_FILE="$GITTOOL_CFG_ROOT/config"
+
+get_vault_master() {
+	local master
+	if ! master="$(GITTOOL_CFG_ROOT="$GITTOOL_CFG_ROOT" GITTOOL_CFG_FILE="$GITTOOL_CFG_FILE" "$(dirname "$0")/vault.sh" -m 2>/dev/null)"; then
+		return 1
+	fi
+	[ -n "$master" ] || return 1
+	printf '%s' "$master"
+}
+
+vault_add_ssh_host() {
+	local alias="$1"
+	[ -n "$alias" ] || return 0
+	mkdir -p "$GITTOOL_CFG_ROOT"
+	touch "$GITTOOL_CFG_FILE"
+	local has_vault existing line
+	has_vault=0
+	if grep -qE '^\[vault\]' "$GITTOOL_CFG_FILE" 2>/dev/null; then
+		has_vault=1
+	fi
+	if [ $has_vault -eq 0 ]; then
+		# No vault config yet; do not create it implicitly
+		return 0
+	fi
+	existing="$(awk '/^\[vault\]/{in_v=1;next} /^\[/{in_v=0} in_v && /^ssh_hosts=/{print $0;exit}' "$GITTOOL_CFG_FILE" 2>/dev/null || true)"
+	if [ -z "$existing" ]; then
+		# Append ssh_hosts line inside existing [vault] block
+		awk -v a="$alias" '
+			/^\[vault\]/{print;printed=1;next}
+			printed==1 && !seen && /^\[/{print "ssh_hosts=" a;seen=1}
+			{print}
+			END{if(printed==1 && !seen)print "ssh_hosts=" a}
+		' "$GITTOOL_CFG_FILE" >"$GITTOOL_CFG_FILE.tmp" && mv "$GITTOOL_CFG_FILE.tmp" "$GITTOOL_CFG_FILE"
+		return 0
+	fi
+	line="${existing#ssh_hosts=}"
+	IFS=',' read -r -a hosts <<<"$line"
+	local h
+	for h in "${hosts[@]}"; do
+		[ "$h" = "$alias" ] && return 0
+	done
+	if [ -z "$line" ]; then
+		new_line="ssh_hosts=$alias"
+	else
+		new_line="ssh_hosts=${line},$alias"
+	fi
+	awk -v old="$existing" -v neu="$new_line" '{gsub(old,neu);print}' "$GITTOOL_CFG_FILE" >"$GITTOOL_CFG_FILE.tmp" && mv "$GITTOOL_CFG_FILE.tmp" "$GITTOOL_CFG_FILE"
+}
+
 show_help() {
 	cat <<EOF
 Commands (shortcuts):
@@ -351,7 +402,7 @@ add_ssh_key() {
 			echo "  IdentitiesOnly yes"
 		} >> "$CONFIG_FILE"
 		chmod 600 "$keyfile" || true
-		if [ "$do_agent" -eq 1 ]; then
+		if [ "$do_agent" -eq 1 ] && [ -z "${GITTOOL_SSH_SKIP_AGENT_ON_VAULT:-}" ]; then
 			ssh-add "$keyfile" 2>/dev/null && echo "Key added to ssh-agent: $keyfile" || echo "Warning: ssh-add failed for $keyfile (continuing)" >&2
 		else
 			echo "(--no-agent) Skipping ssh-add"
@@ -467,7 +518,31 @@ add_ssh_key() {
 		read -p "Key name (e.g.: personal): " HOST_ALIAS; [ -z "${HOST_ALIAS}" ] && { echo "Key name cannot be empty."; exit 1; }
 		if echo "$HOST_ALIAS" | grep -q '[[:space:]]'; then echo "Key name cannot contain spaces."; exit 1; fi
 		local KEYFILE="$SSH_DIR/id_ed25519_${HOST_ALIAS}"
-		if [ -f "$KEYFILE" ]; then echo "SSH key already exists: $KEYFILE"; else read -p "Email for the key: " EMAIL; [ -z "${EMAIL}" ] && { echo "Email cannot be empty."; exit 1; }; echo "Generating SSH key..."; ssh-keygen -t ed25519 -C "$EMAIL" -f "$KEYFILE"; fi
+		if [ -f "$KEYFILE" ]; then
+			echo "SSH key already exists: $KEYFILE"
+		else
+			read -p "Email for the key: " EMAIL; [ -z "${EMAIL}" ] && { echo "Email cannot be empty."; exit 1; }
+			local use_vault="N" master=""
+			if [ -t 0 ]; then
+				read -p "Use vault master as SSH key passphrase? [y/N]: " use_vault || true
+			fi
+			case "$use_vault" in
+				[yY]|[yY][eE][sS])
+					master="$(get_vault_master 2>/dev/null || true)"
+					if [ -z "$master" ]; then
+						echo "Vault master not available; generating key without passphrase."
+					fi
+				;;
+			esac
+			echo "Generating SSH key..."
+			if [ -n "$master" ]; then
+				ssh-keygen -t ed25519 -C "$EMAIL" -f "$KEYFILE" -N "$master"
+				GITTOOL_SSH_SKIP_AGENT_ON_VAULT=1
+			else
+				ssh-keygen -t ed25519 -C "$EMAIL" -f "$KEYFILE" -N ""
+			fi
+			vault_add_ssh_host "$HOST_ALIAS" || true
+		fi
 		register_key_file "$KEYFILE" "$HOST_ALIAS" "$HOSTNAME" "$DO_AGENT" "$DO_SIGN" "$DRY_RUN"
 	fi
 }
