@@ -378,7 +378,7 @@ rotate_ssh_key() {
 		return 1
 	fi
 	chmod 600 "$identity_file" 2>/dev/null || true
-	if [ $DO_AGENT -eq 1 ]; then ssh-add "$identity_file" 2>/dev/null || echo "Warning: ssh-add failed (continuing)" >&2; else echo "(--no-agent) Skipping ssh-add."; fi
+	if [ $DO_AGENT -eq 1 ]; then ssh-add "$identity_file" 2>/dev/null || echo "Warning: ssh-add failed (continuing)" >&2; fi
 	local allowed_file="$HOME/.config/git/allowed_signers"
 	if [ $DO_SIGN -eq 1 ]; then
 		if [ -n "$old_pub_content" ] && [ -f "$allowed_file" ] && grep -Fq "$old_pub_content" "$allowed_file"; then
@@ -480,7 +480,6 @@ add_ssh_key() {
 			[ "$do_sign" -eq 1 ] && echo "[dry-run] Would run signing setup" || echo "[dry-run] Skipping signing setup (--no-sign)"
 			return 0
 		fi
-		echo "Adding configuration to $CONFIG_FILE..."
 		{
 			echo "Host $alias"
 			echo "  AddKeysToAgent yes"
@@ -496,7 +495,6 @@ add_ssh_key() {
 			echo "(--no-agent) Skipping ssh-add"
 		fi
 		[ "$do_sign" -eq 1 ] && ensure_signing_setup "$keyfile" || echo "(--no-sign) Skipping signing setup"
-		echo "Configuration added: $alias"
 	}
 
 	search_and_select_existing_key() {
@@ -581,7 +579,7 @@ add_ssh_key() {
 				if [ $DRY_RUN -eq 1 ]; then
 					echo "[dry-run] Would generate SSH key: $KEYFILE (email: $EMAIL)"
 				else
-					echo "Generating SSH key..."; ssh-keygen -t ed25519 -C "$EMAIL" -f "$KEYFILE"
+					ssh-keygen -t ed25519 -C "$EMAIL" -f "$KEYFILE"
 				fi
 			fi
 			register_key_file "$KEYFILE" "$HOST_ALIAS" "$HOSTNAME" "$DO_AGENT" "$DO_SIGN" "$DRY_RUN"
@@ -656,9 +654,9 @@ ensure_signing_setup() {
 	if grep -Fq "$pub_content" "$allowed_file"; then
 		echo "Key already present in allowed_signers."
 	else
-		local ans="N"
-		if [ -z "${GITTOOL_NON_INTERACTIVE:-}" ] && [ -t 0 ]; then read -p "Add key to allowed_signers for commit signing? [y/N]: " ans; fi
-		case "$ans" in [yY]|[yY][eE][sS]) echo "$email $pub_content" >> "$allowed_file"; echo "Added to allowed_signers." ;; *) echo "Not added." ;; esac
+		# Always add key to allowed_signers without prompting
+		echo "$email $pub_content" >> "$allowed_file"
+		echo "Added key to allowed_signers."
 	fi
 	# Configure git global allowedSignersFile
 	local current_allowed
