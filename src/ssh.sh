@@ -17,6 +17,21 @@ get_vault_master() {
 	printf '%s' "$master"
 }
 
+ensure_vault_initialized() {
+	# Returns 0 if a vault is already initialized, otherwise runs `vault init` interactively.
+	local vault_dir
+	vault_dir="${GITTOOL_CONFIG_DIR:-$HOME/.gittool}/vault"
+	if [ -d "$vault_dir" ] && ls "$vault_dir"/vault-*.gpg >/dev/null 2>&1; then
+		return 0
+	fi
+	echo "Vault is not initialized yet. Running 'gt vault init'..." >&2
+	"$(dirname "$0")/vault.sh" init || {
+		echo "Failed to initialize vault." >&2
+		return 1
+	}
+	return 0
+}
+
 vault_add_ssh_host() {
 	local alias="$1"
 	[ -n "$alias" ] || return 0
@@ -614,7 +629,9 @@ add_ssh_key() {
 			fi
 			case "$use_vault" in
 				[yY]|[yY][eE][sS])
-					master="$(get_vault_master 2>/dev/null || true)"
+					if ensure_vault_initialized; then
+						master="$(get_vault_master 2>/dev/null || true)"
+					fi
 					if [ -z "$master" ]; then
 						echo "Vault master not available; generating key without passphrase."
 					fi
