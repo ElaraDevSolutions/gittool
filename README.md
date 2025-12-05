@@ -98,6 +98,30 @@ The script will prompt for:
 
 After successful generation the key is stored at `~/.ssh/id_ed25519_<alias>` and a Host block is appended to `~/.ssh/config`.
 
+1.0) Using the vault master as SSH key passphrase
+
+If you have already initialized the local vault (`gt vault init`), the interactive `gt ssh add` flow will also ask:
+
+"Use vault master as SSH key passphrase? [y/N]:"
+
+Behavior when you answer **`y`**:
+- `gt ssh add` calls `gt vault -m` under the hood to decrypt the stored master.
+- The SSH key is generated with that value as its passphrase (`ssh-keygen ... -N <master>`), so there is **no extra prompt** asking for the key password.
+- The new HostAlias is recorded in `~/.config/gittool/config` under the `[vault]` section as part of the `ssh_hosts` list; e.g.:
+
+```ini
+[vault]
+provider=local
+path=/Users/you/.gittool/vault/vault-XXXX.gpg
+ssh_hosts=work-ssh,personal-ssh,new-alias
+```
+
+Behavior when you answer **`N`** or just press Enter:
+- The key is generated without a passphrase (`-N ""`) as before.
+- The vault configuration is left untouched.
+
+The vault is never created implicitly by `gt ssh add`: you must call `gt vault init` explicitly once. After that, any alias created with the vault option becomes part of the `ssh_hosts` mapping so you can see which SSH identities are tied to that master.
+
 1.1) Add a key (non-interactive / CI)
 
 You can create or register keys without prompts by supplying flags:
