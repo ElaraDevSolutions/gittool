@@ -6,7 +6,7 @@ CONFIG_FILE="$SSH_DIR/config"
 FZF_INLINE_OPTS="--height=40% --layout=reverse --border"
 
 GITTOOL_CFG_ROOT="${XDG_CONFIG_HOME:-$HOME/.config}/gittool"
-GITTOOL_CFG_FILE="$GITTOOL_CFG_ROOT/config"
+GITTOOL_CFG_FILE="$GITTOOL_CFG_ROOT/vault"
 
 get_vault_master() {
 	local master
@@ -253,6 +253,30 @@ show_ssh_key_details() {
 		fi
 	else
 		echo "  allowed_signers: file not found or key missing ($allowed_file)"
+	fi
+
+	# Vault expiration info (global vault, not per-alias)
+	local vault_cfg_file="$HOME/.config/gittool/vault"
+	if [ -f "$vault_cfg_file" ]; then
+		local expires_line expires
+		expires_line="$(
+			awk '
+				BEGIN { in_vault=0 }
+				/^[[]vault[]]/ { in_vault=1; next }
+				/^[[][^]]+[]]/ { in_vault=0 }
+				in_vault==1 && /^expires=/ { print; exit }
+			' "$vault_cfg_file" 2>/dev/null || true
+		)"
+		if [ -n "$expires_line" ]; then
+			expires="${expires_line#expires=}"
+			if [ -n "$expires" ] && [ "$expires" != "0" ]; then
+				echo "Vault expiration (days): $expires"
+			else
+				echo "Vault expiration: never"
+			fi
+		else
+			echo "Vault expiration: not configured"
+		fi
 	fi
 
 	echo

@@ -7,7 +7,7 @@ set -euo pipefail
 GITTOOL_CONFIG_DIR="${GITTOOL_CONFIG_DIR:-$HOME/.gittool}"
 VAULT_DIR="$GITTOOL_CONFIG_DIR/vault"
 GITTOOL_CFG_ROOT="${GITTOOL_CFG_ROOT:-$HOME/.config/gittool}"
-GITTOOL_CFG_FILE="$GITTOOL_CFG_ROOT/config"
+GITTOOL_CFG_FILE="$GITTOOL_CFG_ROOT/vault"
 
 usage() {
 	cat <<EOF
@@ -25,22 +25,23 @@ ensure_vault_dir() {
 }
 
 write_local_vault_config() {
-	# Persist local vault provider configuration to ~/.config/gittool/config
+	# Persist local vault provider configuration to ~/.config/gittool/vault
 	# Format (single local provider, always overwritten on init):
 	# [vault]
 	# provider=local
 	# path=/absolute/path/to/vault-XXXX.gpg
+	# expires=<days>
 	# ssh_hosts=comma,separated,host,aliases
-	local master_file="$1"
+	local master_file="$1" expire_days="${2:-0}"
 
 	mkdir -p "$GITTOOL_CFG_ROOT"
 
-	local existing_ssh_hosts=""
+	local existing_ssh_hosts="" existing_expires=""
 	local original_tmp
 	original_tmp="$(mktemp)"
 	if [ -f "$GITTOOL_CFG_FILE" ]; then
 		cp "$GITTOOL_CFG_FILE" "$original_tmp" 2>/dev/null || :
-		# Extract ssh_hosts only from the existing [vault] block
+		# Extract ssh_hosts and expires only from the existing [vault] block
 		existing_ssh_hosts="$(
 			awk '
 				BEGIN { in_vault=0 }
@@ -49,6 +50,17 @@ write_local_vault_config() {
 				in_vault==1 && /^ssh_hosts=/ { print; exit }
 			' "$original_tmp" 2>/dev/null || true
 		)"
+		# Preserve previous expires if present and no new value was provided
+		if [ -z "$expire_days" ] || [ "$expire_days" = "0" ]; then
+			existing_expires="$(
+				awk '
+					BEGIN { in_vault=0 }
+					/^[[]vault[]]/ { in_vault=1; next }
+					/^[[][^]]+[]]/ { in_vault=0 }
+					in_vault==1 && /^expires=/ { print; exit }
+				' "$original_tmp" 2>/dev/null || true
+			)"
+		fi
 	fi
 
 	# Preserve any non-[vault] content by filtering existing file, then append new block
@@ -72,6 +84,12 @@ write_local_vault_config() {
 		echo "[vault]"
 		echo "provider=local"
 		echo "path=$master_file"
+		# Write expires only if non-zero or previously set
+		if [ -n "$expire_days" ] && [ "$expire_days" != "0" ]; then
+			echo "expires=$expire_days"
+		elif [ -n "$existing_expires" ]; then
+			echo "$existing_expires"
+		fi
 		# Preserve existing ssh_hosts mapping if present
 		[ -n "$existing_ssh_hosts" ] && echo "$existing_ssh_hosts"
 	} >"$GITTOOL_CFG_FILE"
@@ -116,6 +134,18 @@ vault_init() {
 	if [ -z "$key_id" ]; then
 		key_id="$(gpg --list-keys --with-colons 2>/dev/null | awk -F: '/^pub/ {print $5; exit}')"
 	fi
+	# Ask vault expiration in days (0 or empty means never expires)
+	local expire_days_raw="" expire_days="0"
+	if [ -t 0 ]; then
+		printf "Vault expiration in days (0 for never): " >&2
+		IFS= read -r expire_days_raw || true
+	fi
+	if [ -n "$expire_days_raw" ] && [ "$expire_days_raw" != "0" ]; then
+		expire_days="$expire_days_raw"
+	else
+		expire_days="0"
+	fi
+
 	if [ -z "$key_id" ]; then
 		# No key found: create a non-interactive RSA key specifically for the vault
 		local key_params
@@ -128,7 +158,7 @@ Subkey-Length: 3072
 Name-Real: gittool-vault
 Name-Comment: auto-generated key for gittool vault
 Name-Email: gittool-vault@local
-Expire-Date: 0
+Expire-Date: $expire_days
 %no-protection
 %commit
 EOF
@@ -205,7 +235,17 @@ EOF
 	fi
 
 	# Persist/refresh local provider configuration for the vault
-	write_local_vault_config "$master_file"
+	write_local_vault_config "$master_file" "$expire_days"
+
+	# Ensure global config file exists with default expiry warning threshold
+	# ~/.config/gittool/config -> vault_expiry_warn_days=5 (if not present)
+	local general_cfg="$GITTOOL_CFG_ROOT/config"
+	if [ ! -f "$general_cfg" ]; then
+		mkdir -p "$GITTOOL_CFG_ROOT"
+		printf '%s\n' "vault_expiry_warn_days=5" >"$general_cfg"
+	elif ! grep -qE '^vault_expiry_warn_days=' "$general_cfg" 2>/dev/null; then
+		printf '%s\n' "vault_expiry_warn_days=5" >>"$general_cfg"
+	fi
 
 	echo "Vault initialized at $master_file" >&2
 }
