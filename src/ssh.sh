@@ -349,6 +349,27 @@ remove_ssh_key() {
 	KEYFILE="$SSH_DIR/id_ed25519_${HOST_ALIAS}"
 	if [ -f "$KEYFILE" ]; then ssh-add -d "$KEYFILE" || true; rm -f "$KEYFILE"; echo "Private key removed: $KEYFILE"; fi
 	if [ -f "$KEYFILE.pub" ]; then rm -f "$KEYFILE.pub"; echo "Public key removed: $KEYFILE.pub"; fi
+	# Update vault ssh_hosts mapping (if a vault is configured)
+	if [ -f "$GITTOOL_CFG_FILE" ] && grep -qE '^\[vault\]' "$GITTOOL_CFG_FILE" 2>/dev/null; then
+		current_line="$(awk '/^\[vault\]/{in_v=1;next} /^\[/{in_v=0} in_v && /^ssh_hosts=/{print $0;exit}' "$GITTOOL_CFG_FILE" 2>/dev/null || true)"
+		if [ -n "$current_line" ]; then
+			value="${current_line#ssh_hosts=}"
+			IFS=',' read -r -a hosts <<<"$value"
+			new_hosts=()
+			for h in "${hosts[@]}"; do
+				[ "$h" = "$HOST_ALIAS" ] && continue
+				[ -n "$h" ] && new_hosts+=("$h")
+			done
+			if [ ${#new_hosts[@]} -eq 0 ]; then
+				new_line="ssh_hosts="
+			else
+				joined="${new_hosts[*]}"
+				joined="${joined// /,}"
+				new_line="ssh_hosts=${joined}"
+			fi
+			awk -v old="$current_line" -v neu="$new_line" '{gsub(old,neu);print}' "$GITTOOL_CFG_FILE" >"${GITTOOL_CFG_FILE}.tmp" && mv "${GITTOOL_CFG_FILE}.tmp" "$GITTOOL_CFG_FILE"
+		fi
+	fi
 	echo "Removal completed."
 }
 
