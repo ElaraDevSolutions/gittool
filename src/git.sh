@@ -146,6 +146,44 @@ clone_with_ssh() {
 }
 
 main() {
+  # Before running git commands, warn or renew vault if expiring/expired
+  local vault_cfg="$HOME/.config/gittool/vault" general_cfg="$HOME/.config/gittool/config"
+  if [ -f "$vault_cfg" ] && [ -s "$vault_cfg" ]; then
+  local expires_line expires_days
+  expires_line="$(
+    awk '
+      BEGIN { in_vault=0 }
+      /^[[]vault[]]/ { in_vault=1; next }
+      /^[[][^]]+[]]/ { in_vault=0 }
+      in_vault==1 && /^expires=/ { print; exit }
+    ' "$vault_cfg" 2>/dev/null || true
+  )"
+  if [ -n "$expires_line" ]; then
+    expires_days="${expires_line#expires=}"
+    # Only act when expiration is configured and non-zero
+    if [ -n "$expires_days" ] && [ "$expires_days" != "0" ]; then
+      local warn_days=5
+      if [ -f "$general_cfg" ]; then
+        local cfg_line
+        cfg_line="$(grep -E '^vault_expiry_warn_days=' "$general_cfg" 2>/dev/null || true)"
+        if [ -n "$cfg_line" ]; then
+          warn_days="${cfg_line#vault_expiry_warn_days=}"
+        fi
+      fi
+      # Interpret expires_days<=0 as expired
+      if [ "$expires_days" -le 0 ] 2>/dev/null; then
+        # Vault expired: abort this git invocation and instruct re-init
+        echo "Your vault has expired; please initialize a new vault." >&2
+        echo "Run: gt vault init" >&2
+        return 1
+      elif [ "$expires_days" -le "$warn_days" ] 2>/dev/null; then
+        # Vault expiring soon: plain warning
+        echo "Your vault will expire in $expires_days day(s)." >&2
+      fi
+    fi
+  fi
+  fi
+
   if [ "$#" -ge 2 ] && [ "$1" = "clone" ]; then
     local link="$2"
     if [[ ! "$link" =~ ^git@ ]]; then

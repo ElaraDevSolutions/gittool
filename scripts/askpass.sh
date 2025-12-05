@@ -5,7 +5,7 @@ set -euo pipefail
 # Requires the usual gittool config env vars or defaults.
 
 GITTOOL_CFG_ROOT="${XDG_CONFIG_HOME:-$HOME/.config}/gittool"
-GITTOOL_CFG_FILE="$GITTOOL_CFG_ROOT/config"
+GITTOOL_CFG_FILE="$GITTOOL_CFG_ROOT/vault"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 VAULT_SH="${SCRIPT_DIR%/scripts}/src/vault.sh"
