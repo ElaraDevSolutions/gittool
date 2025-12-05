@@ -317,7 +317,7 @@ unlock_ssh_key() {
 	fi
 	# Use SSH_ASKPASS helper to provide the vault master non-interactively
 	local askpass
-	askpass="$(cd "$(dirname "$0")/.." && pwd)/scripts/gittool-askpass.sh"
+	askpass="$(cd "$(dirname "$0")/.." && pwd)/scripts/askpass.sh"
 	if [ ! -x "$askpass" ]; then
 		echo "SSH askpass helper not found or not executable: $askpass" >&2
 		return 1
