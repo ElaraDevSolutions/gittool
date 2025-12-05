@@ -198,6 +198,22 @@ perform_install() {
   ensure_dirs
   install_files
   create_wrapper
+  # Write VERSION into user config so gt -v has a canonical source
+  local config_dir config_version_file src_version_file ver
+  config_dir="${HOME}/.config/gittool"
+  config_version_file="${config_dir}/VERSION"
+  src_version_file="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/VERSION"
+  if [[ -f "$src_version_file" ]] && ver="$(tr -d '\n' < "$src_version_file" 2>/dev/null)" && [[ -n "$ver" ]]; then
+    announce "Writing VERSION $ver to $config_version_file"
+    if (( DRY_RUN )); then
+      echo "DRY: would write VERSION to $config_version_file"
+    else
+      mkdir -p "$config_dir"
+      printf '%s\n' "$ver" > "$config_version_file"
+    fi
+  else
+    echo "[WARNING] VERSION file not found or empty; skipping config version write" >&2
+  fi
   announce "Installation complete. Add $BIN_DIR to your PATH if it isn't already."
   if ! command -v gt >/dev/null 2>&1; then
   echo "[INFO] Open a new shell or export PATH:\n  export PATH=\"$BIN_DIR:\$PATH\""
