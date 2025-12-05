@@ -26,6 +26,7 @@ run_test() {
 
 run_test "$TEST_DIR/test_ssh.sh"
 run_test "$TEST_DIR/test_install.sh"
+run_test "$TEST_DIR/test_vault.sh"
 
 echo "\nSummary:" >&2
 for line in "${RESULTS[@]}"; do echo "$line" >&2; done

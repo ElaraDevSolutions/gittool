@@ -4,6 +4,8 @@
 #
 # Installs the scripts under a chosen prefix and creates a "gt" wrapper in <prefix>/bin.
 # Works on macOS and Linux. Requires: bash, cp, mkdir, grep, sed.
+# This script also checks for and attempts to install GnuPG (gpg) and fzf
+# using the native package manager when possible.
 #
 # Quick usage (installs to /usr/local if writable, otherwise ~/.local):
 #   curl -fsSL https://raw.githubusercontent.com/<OWNER>/<REPO>/latest/install.sh | bash
@@ -16,7 +18,7 @@
 #   -h|--help        Show this help summary
 #
 # Installed layout:
-#   <prefix>/lib/gittool/{gt.sh,git.sh,ssh.sh}
+#   <prefix>/lib/gittool/{gt.sh,git.sh,ssh.sh,vault.sh,doctor.sh}
 #   <prefix>/bin/gt (wrapper)
 #
 # Identification marker (for safe uninstall): line containing: GT_INSTALL_WRAPPER_MARKER
@@ -62,6 +64,86 @@ WRAPPER="$BIN_DIR/gt"
 announce() { echo "==> $*"; }
 do_cmd() { if (( DRY_RUN )); then echo "DRY: $*"; else eval "$@"; fi }
 
+detect_os() {
+  # Prints: macos | linux | other
+  local uname
+  uname="$(uname -s 2>/dev/null || echo unknown)"
+  case "$uname" in
+    Darwin) echo "macos" ;;
+    Linux)  echo "linux" ;;
+    *)      echo "other" ;;
+  esac
+}
+
+ensure_tool() {
+  # ensure_tool <binary> <brew_formula> <linux_pkg_name>
+  local bin="$1"; local brew_pkg="$2"; local linux_pkg="$3"
+  if command -v "$bin" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local os
+  os="$(detect_os)"
+
+  if (( DRY_RUN )); then
+    echo "DRY: would ensure presence of $bin (os=$os, brew=$brew_pkg, linux_pkg=$linux_pkg)"
+    return 0
+  fi
+
+  case "$os" in
+    macos)
+      if command -v brew >/dev/null 2>&1; then
+        announce "Installing missing dependency '$bin' via Homebrew ($brew_pkg)"
+        if ! brew install "$brew_pkg"; then
+          echo "[ERROR] Failed to install $brew_pkg via Homebrew. Please install $bin manually." >&2
+          exit 1
+        fi
+      else
+        echo "[ERROR] '$bin' is required but not found, and Homebrew is not available on macOS." >&2
+        echo "        Install Homebrew from https://brew.sh/ or install $brew_pkg manually and re-run." >&2
+        exit 1
+      fi
+      ;;
+    linux)
+      # Try common package managers in a best-effort, non-interactive way
+      if command -v apt-get >/dev/null 2>&1; then
+        announce "Installing missing dependency '$bin' via apt-get ($linux_pkg)"
+        if ! sudo apt-get update -y && sudo apt-get install -y "$linux_pkg"; then
+          echo "[ERROR] Failed to install $linux_pkg via apt-get. Please install $bin manually." >&2
+          exit 1
+        fi
+      elif command -v dnf >/dev/null 2>&1; then
+        announce "Installing missing dependency '$bin' via dnf ($linux_pkg)"
+        if ! sudo dnf install -y "$linux_pkg"; then
+          echo "[ERROR] Failed to install $linux_pkg via dnf. Please install $bin manually." >&2
+          exit 1
+        fi
+      elif command -v yum >/dev/null 2>&1; then
+        announce "Installing missing dependency '$bin' via yum ($linux_pkg)"
+        if ! sudo yum install -y "$linux_pkg"; then
+          echo "[ERROR] Failed to install $linux_pkg via yum. Please install $bin manually." >&2
+          exit 1
+        fi
+      elif command -v pacman >/dev/null 2>&1; then
+        announce "Installing missing dependency '$bin' via pacman ($linux_pkg)"
+        if ! sudo pacman -Sy --noconfirm "$linux_pkg"; then
+          echo "[ERROR] Failed to install $linux_pkg via pacman. Please install $bin manually." >&2
+          exit 1
+        fi
+      else
+        echo "[ERROR] '$bin' is required but was not found. No supported package manager detected." >&2
+        echo "        Please install it manually and re-run this installer." >&2
+        exit 1
+      fi
+      ;;
+    *)
+      echo "[ERROR] '$bin' is required but OS detection failed or is unsupported." >&2
+      echo "        Please install it manually and re-run this installer." >&2
+      exit 1
+      ;;
+  esac
+}
+
 ensure_dirs() {
   announce "Creating directories ($LIB_DIR, $BIN_DIR)"
   do_cmd "mkdir -p '$LIB_DIR'"
@@ -70,7 +152,8 @@ ensure_dirs() {
 
 install_files() {
   announce "Copying scripts to $LIB_DIR"
-  for f in gt.sh git.sh ssh.sh; do
+  # Keep this list in sync with src/ helpers used by gt.sh
+  for f in gt.sh git.sh ssh.sh vault.sh doctor.sh; do
     if [[ ! -f "$SCRIPT_DIR_SRC/$f" ]]; then
   echo "[ERROR] Source file not found: $SCRIPT_DIR_SRC/$f" >&2; exit 1
     fi
@@ -107,6 +190,11 @@ EOF
 }
 
 perform_install() {
+  # Ensure core runtime dependencies
+  ensure_tool gpg gnupg gnupg
+  # fzf is optional but highly recommended for a good UX; install if missing.
+  ensure_tool fzf fzf fzf || true
+
   ensure_dirs
   install_files
   create_wrapper

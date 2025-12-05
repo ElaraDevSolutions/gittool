@@ -1,11 +1,12 @@
 # gittool (gt)
 
-A small, focused command-line helper that makes working with Git and multiple SSH keys easier. It provides:
+Small CLI helper around Git that focuses on:
 
-- Simple SSH key and config management (add, remove, list keys).
+- SSH key/config management (add, remove, rotate, select).
 - A tiny wrapper to clone repositories using a chosen SSH HostAlias.
+- A local vault for storing a master password encrypted via GPG.
 
-The command is distributed as `gt` and includes a dispatcher that forwards SSH-related commands to the bundled `ssh.sh` helper.
+The main command is `gt`, which dispatches to small helpers like `ssh.sh`, `vault.sh` and `doctor.sh`.
 
 ## Installation
 
@@ -58,22 +59,28 @@ bash install.sh
 
 ## Quick overview
 
-Common commands:
+Core commands:
 
 | Command | Description |
 |---|---|
-| `gt ssh add` | Add a new SSH key and append a Host block to `~/.ssh/config` (interactive). |
-| `gt ssh add <alias-or-pattern>` | Register an existing key whose filename contains the pattern (auto or interactive selection). |
-| `gt ssh remove <HostAlias>` | Remove key files and the Host block for the given HostAlias. |
-| `gt ssh rotate [flags] <HostAlias>` | Rotate (replace) the SSH key for an existing HostAlias (backup & regenerate). |
-| `gt ssh list` | Show Host aliases declared in `~/.ssh/config`. |
-| `gt ssh show <HostAlias>` / `gt ssh -s <HostAlias>` | Show detailed information about a configured HostAlias and its key. |
-| `gt ssh help` | Show help for the SSH helper. |
-| `gt ssh select` | Interactively pick a configured HostAlias and rewrite the current repo's `origin` remote to use it. |
-| `gt clone <SSH-link>` | Clone using a selected HostAlias (replaces the host in the SSH link). |
-| `gt doctor` | Run basic diagnostics on your Git, SSH, and gittool setup. |
+| `gt ssh add` | Add/register SSH keys and Host blocks in `~/.ssh/config`. |
+| `gt ssh remove <HostAlias>` | Remove key files and the Host block for the alias. |
+| `gt ssh rotate [flags] <HostAlias>` | Rotate keys while keeping the same HostAlias. |
+| `gt ssh list` | List Host aliases from `~/.ssh/config`. |
+| `gt ssh show <HostAlias>` | Show details about a configured alias and key. |
+| `gt ssh select` | Switch the current repo's `origin` to a chosen HostAlias. |
+| `gt ssh unlock <HostAlias>` | Unlock the SSH key for a HostAlias using the vault master. |
+| `gt clone <SSH-link>` | Clone using a selected HostAlias. |
+| `gt vault init` | Initialize a local vault and master password (GPG-encrypted). |
+| `gt vault -m` / `gt vault show-master` | Decrypt and print the master password. |
+| `gt doctor` | Run diagnostics on your Git/SSH/gittool setup. |
 
-The `gt` dispatcher forwards `gt ssh ...` to the `ssh.sh` helper in the installation directory. For normal Git commands `gt` simply forwards to `git`.
+The dispatcher forwards `gt ssh ...` and `gt vault ...` to their helpers. For normal Git commands `gt` simply forwards to `git`.
+
+The rest of this README is split by topic:
+- SSH helper: `gt ssh ...` (most of the tool today).
+- Vault helper: `gt vault ...` (local master password storage).
+- Clone wrapper and doctor.
 
 ## SSH helper (commands & examples)
 
@@ -91,6 +98,30 @@ The script will prompt for:
 - Email (used as the key comment during generation)
 
 After successful generation the key is stored at `~/.ssh/id_ed25519_<alias>` and a Host block is appended to `~/.ssh/config`.
+
+1.0) Using the vault master as SSH key passphrase
+
+If you have already initialized the local vault (`gt vault init`), the interactive `gt ssh add` flow will also ask:
+
+"Use vault master as SSH key passphrase? [y/N]:"
+
+Behavior when you answer **`y`**:
+- `gt ssh add` calls `gt vault -m` under the hood to decrypt the stored master.
+- The SSH key is generated with that value as its passphrase (`ssh-keygen ... -N <master>`), so there is **no extra prompt** asking for the key password.
+- The new HostAlias is recorded in `~/.config/gittool/config` under the `[vault]` section as part of the `ssh_hosts` list; e.g.:
+
+```ini
+[vault]
+provider=local
+path=/Users/you/.gittool/vault/vault-XXXX.gpg
+ssh_hosts=work-ssh,personal-ssh,new-alias
+```
+
+Behavior when you answer **`N`** or just press Enter:
+- The key is generated without a passphrase (`-N ""`) as before.
+- The vault configuration is left untouched.
+
+The vault is never created implicitly by `gt ssh add`: you must call `gt vault init` explicitly once. After that, any alias created with the vault option becomes part of the `ssh_hosts` mapping so you can see which SSH identities are tied to that master.
 
 1.1) Add a key (non-interactive / CI)
 
@@ -222,6 +253,22 @@ Return codes / edge cases:
 * If only one alias exists, it's auto-selected.
 * No changes are made if selection is aborted (ESC/Ctrl-C in `fzf` or empty choice).
 
+7.1) Unlock a key via the vault master (new)
+
+When a HostAlias was created with the vault-enabled `gt ssh add` flow, it is registered under `[vault].ssh_hosts` in `~/.config/gittool/config`. You can later unlock that key in the current session without typing its passphrase:
+
+```bash
+gt ssh unlock personal
+```
+
+Behavior:
+- Finds the `IdentityFile` for the given HostAlias in `~/.ssh/config`.
+- Checks that the alias is listed in `[vault].ssh_hosts`.
+- Calls `gt vault -m` to obtain the master and uses it to run `ssh-add` for that key.
+- If the key is already loaded in `ssh-agent`, it exits without doing anything.
+
+This is useful before running commands like `git clone` or `git fetch` that would otherwise prompt for the key passphrase. Once unlocked, the key remains available to the agent for the rest of the session according to your `ssh-agent` lifetime.
+
 8) Rotate an existing key (new)
 
 Use this to periodically replace a key while keeping the same HostAlias (remotes like `git@alias:org/repo.git` keep working):
@@ -283,6 +330,53 @@ Quick check:
 gt ssh sign-status
 ```
 
+## Vault helper (local master secret)
+
+The vault module manages a single **master password** stored locally, encrypted with GPG.
+
+### How it works
+
+- Uses a config directory under `~/.gittool/vault` (or `$GITTOOL_CONFIG_DIR/vault` if set).
+- On first `gt vault init`:
+	- Ensures a GPG key exists:
+		- If you already have keys, it picks the first public key as the default.
+		- If no keys exist, it **auto-generates** a non-interactive RSA key just for gittool using a params file `gpg-key-params.txt` stored in the vault directory.
+	- Decides the master password:
+		- If running in a TTY, you are prompted: `Enter master password (leave empty to auto-generate):` and then asked to confirm; empty input generates a random strong password.
+		- If you pass `-p/--password <value>`, that value is used directly (no prompt).
+		- In non-interactive/CI contexts with no TTY and no `-p`, a random password is generated.
+	- Encrypts the master with the GPG key into a file `vault-<random-id>.gpg` inside the vault directory.
+
+### Commands
+
+- Initialize (interactive or with flags):
+
+```bash
+gt vault init                 # prompt for master; empty = auto-generate
+gt vault init -p "MySecret"   # use provided master without prompt
+gt vault init KEYID123        # advanced: override which GPG key to use
+```
+
+- Show the stored master password:
+
+```bash
+gt vault -m
+gt vault show-master
+```
+
+This simply runs `gpg --decrypt` on the `vault-*.gpg` file and prints the master. If the underlying GPG private key has no passphrase (the auto-generated one uses `%no-protection`), this is fully non-interactive. If you later switch to a protected key, any passphrase prompt will come from `gpg` itself.
+
+### CI / non-interactive usage
+
+- `gt vault init` can be safely called in pipelines via:
+
+```bash
+gt vault init -p "$SOME_SECRET"   # explicit master
+```
+
+- The tests in `test/test_vault.sh` run entirely non-interactively by piping empty lines into `vault.sh` and asserting that a master is generated and that vault initialization is idempotent.
+
+
 ## Cloning with a chosen HostAlias
 
 `gt` includes a tiny wrapper around `git clone` that replaces the host portion of an SSH repo link with a selected HostAlias from your SSH config. Example:
@@ -331,7 +425,7 @@ With `--alias <HostAlias>`, it appends the detailed view from `gt ssh show <Host
 
 ## Contributing
 
-Patches, bug reports and improvements are welcome. Tests are a small bash test script under `test/test_ssh.sh` that runs in an isolated temporary HOME.
+Patches, bug reports and improvements are welcome. Tests are small bash scripts under `test/` that run in an isolated temporary HOME (`test_ssh.sh`, `test_vault.sh`, `test_install.sh`).
 
 ## Distribution / packaging options
 
