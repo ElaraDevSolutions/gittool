@@ -60,7 +60,7 @@ vault_add_ssh_host() {
 	line="${existing#ssh_hosts=}"
 	IFS=',' read -r -a hosts <<<"$line"
 	local h
-	for h in "${hosts[@]}"; do
+	for h in "${hosts[@]:-}"; do
 		[ "$h" = "$alias" ] && return 0
 	done
 	if [ -z "$line" ]; then
@@ -80,7 +80,7 @@ Commands (shortcuts):
   list   (-l)                     List configured Host aliases.
   select                          Rewrite current repo origin to chosen HostAlias.
   sign-status                     Show if signing key is in allowed_signers.
-	show   (-s) <HostAlias>         Show details about a configured SSH key.
+  show   (-s) <HostAlias>         Show details about a configured SSH key.
   help   (-h)                     Show this help.
 
 Rotate flags:
@@ -291,7 +291,7 @@ unlock_ssh_key() {
 	value="${hosts_line#ssh_hosts=}"
 	IFS=',' read -r -a hosts <<<"$value"
 	local linked=0 h
-	for h in "${hosts[@]}"; do
+	for h in "${hosts[@]:-}"; do
 		[ "$h" = "$HOST_ALIAS" ] && { linked=1; break; }
 	done
 	if [ $linked -eq 0 ]; then
@@ -438,7 +438,7 @@ remove_ssh_key() {
 			value="${current_line#ssh_hosts=}"
 			IFS=',' read -r -a hosts <<<"$value"
 			new_hosts=()
-			for h in "${hosts[@]}"; do
+			for h in "${hosts[@]:-}"; do
 				[ "$h" = "$HOST_ALIAS" ] && continue
 				[ -n "$h" ] && new_hosts+=("$h")
 			done
@@ -510,6 +510,27 @@ add_ssh_key() {
 			echo "(--no-agent) Skipping ssh-add"
 		fi
 		[ "$do_sign" -eq 1 ] && ensure_signing_setup "$keyfile" || echo "(--no-sign) Skipping signing setup"
+		# Copy public key to clipboard (if available) and notify user
+		local pub_file="${keyfile}.pub"
+		if [ -f "$pub_file" ]; then
+			local copied=0
+			if command -v pbcopy >/dev/null 2>&1; then
+				cat "$pub_file" | pbcopy 2>/dev/null || true
+				copied=1
+			elif command -v xclip >/dev/null 2>&1; then
+				cat "$pub_file" | xclip -selection clipboard 2>/dev/null || true
+				copied=1
+			elif command -v xsel >/dev/null 2>&1; then
+				cat "$pub_file" | xsel --clipboard --input 2>/dev/null || true
+				copied=1
+			fi
+			if [ "$copied" -eq 1 ]; then
+				# Bold message using ANSI escape codes
+				printf '\033[1m%s\033[0m\n' "Public key content copied to clipboard from $pub_file."
+			else
+				echo "Public key at $pub_file (clipboard tool not found; please copy it manually)."
+			fi
+		fi
 	}
 
 	search_and_select_existing_key() {
@@ -762,6 +783,16 @@ ensure_signing_setup() {
 					fi
 				else
 					echo "Warning: could not determine IdentityFile for alias '$chosen'."
+				fi
+				# Ensure this alias is mapped in vault ssh_hosts, then auto-unlock it
+				if [ -f "$GITTOOL_CFG_FILE" ] && grep -qE '^\[vault\]' "$GITTOOL_CFG_FILE" 2>/dev/null; then
+					# Reuse vault_add_ssh_host to guarantee mapping exists
+					vault_add_ssh_host "$chosen" || true
+					if unlock_ssh_key "$chosen"; then
+						echo "Alias '$chosen' unlocked via vault for this session."
+					else
+						echo "Warning: failed to unlock alias '$chosen' via vault; SSH may still prompt for passphrase." >&2
+					fi
 				fi
 			;;
 			help|-h) show_help ;;
