@@ -247,6 +247,73 @@ show_ssh_key_details() {
 	fi
 }
 
+unlock_ssh_key() {
+	local HOST_ALIAS="$1"
+	ensure_ssh_dir_and_config
+	if [ -z "${HOST_ALIAS:-}" ]; then echo "Missing HostAlias."; show_help; return 1; fi
+	if ! grep -qE "^Host[[:space:]]+${HOST_ALIAS}$" "$CONFIG_FILE" 2>/dev/null; then
+		echo "Host '${HOST_ALIAS}' not found in $CONFIG_FILE." >&2
+		return 1
+	fi
+	local identity_file
+	identity_file="$(get_identity_file_for_alias "$HOST_ALIAS" || true)"
+	if [ -z "$identity_file" ]; then
+		echo "Unable to determine IdentityFile for alias '$HOST_ALIAS'." >&2
+		return 1
+	fi
+	# Check if alias is mapped in vault ssh_hosts
+	if [ ! -f "$GITTOOL_CFG_FILE" ] || ! grep -qE '^\[vault\]' "$GITTOOL_CFG_FILE" 2>/dev/null; then
+		echo "No vault configuration found for gittool; nothing to unlock via vault." >&2
+		return 1
+	fi
+	local hosts_line
+	hosts_line="$(awk '/^\[vault\]/{in_v=1;next} /^\[/{in_v=0} in_v && /^ssh_hosts=/{print $0;exit}' "$GITTOOL_CFG_FILE" 2>/dev/null || true)"
+	if [ -z "$hosts_line" ]; then
+		echo "Vault config has no ssh_hosts mapping; alias '$HOST_ALIAS' not linked to vault." >&2
+		return 1
+	fi
+	local value
+	value="${hosts_line#ssh_hosts=}"
+	IFS=',' read -r -a hosts <<<"$value"
+	local linked=0 h
+	for h in "${hosts[@]}"; do
+		[ "$h" = "$HOST_ALIAS" ] && { linked=1; break; }
+	done
+	if [ $linked -eq 0 ]; then
+		echo "Alias '$HOST_ALIAS' is not listed in vault ssh_hosts; refusing automatic unlock." >&2
+		return 1
+	fi
+	# Already loaded in agent?
+	if command -v ssh-add >/dev/null 2>&1; then
+		if ssh-add -L 2>/dev/null | grep -Fq "$identity_file" 2>/dev/null; then
+			echo "Key already present in ssh-agent for alias '$HOST_ALIAS'."
+			return 0
+		fi
+	fi
+	local master
+	master="$(GITTOOL_CFG_ROOT="$GITTOOL_CFG_ROOT" GITTOOL_CFG_FILE="$GITTOOL_CFG_FILE" "$(dirname "$0")/vault.sh" -m 2>/dev/null || true)"
+	if [ -z "$master" ]; then
+		echo "Failed to obtain vault master; cannot unlock key automatically." >&2
+		return 1
+	fi
+	if ! command -v ssh-add >/dev/null 2>&1; then
+		echo "ssh-add not found; cannot add key to agent." >&2
+		return 1
+	fi
+	# Use SSH_ASKPASS helper to provide the vault master non-interactively
+	local askpass
+	askpass="$(cd "$(dirname "$0")/.." && pwd)/scripts/gittool-askpass.sh"
+	if [ ! -x "$askpass" ]; then
+		echo "SSH askpass helper not found or not executable: $askpass" >&2
+		return 1
+	fi
+	SSH_ASKPASS_REQUIRE=force SSH_ASKPASS="$askpass" DISPLAY=none ssh-add "$identity_file" </dev/null 2>/dev/null || {
+		echo "ssh-add failed; you may need to unlock the key manually." >&2
+		return 1
+	}
+	echo "Key for alias '$HOST_ALIAS' unlocked in ssh-agent using vault master."
+}
+
 rotate_ssh_key() {
 	local HOST_ALIAS="" DO_AGENT=1 DO_SIGN=1 DRY_RUN=0 EMAIL_ARG=""
 	while [ $# -gt 0 ]; do
@@ -628,6 +695,7 @@ ensure_signing_setup() {
 			list|-l) list_host_aliases ;;
 			sign-status) sign_status ;;
 			show|-s) shift || true; show_ssh_key_details "${1:-}" ;;
+			unlock) shift || true; unlock_ssh_key "${1:-}" ;;
 			select)
 				shift || true
 				ensure_ssh_dir_and_config

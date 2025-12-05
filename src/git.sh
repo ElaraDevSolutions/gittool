@@ -8,6 +8,8 @@ SSH_HELP_SCRIPT="$(dirname "$0")/ssh.sh"
 # overridden by exporting FZF_INLINE_OPTS in the environment.
 FZF_INLINE_OPTS="--height=40% --layout=reverse --border"
 
+GT_DISPATCHER="$(dirname "$0")/gt.sh"
+
 # --- Email extraction helpers (duplicated from ssh.sh to avoid sourcing execution) ---
 get_identity_file_for_alias() {
   local alias="$1"
@@ -82,6 +84,27 @@ select_host_alias() {
   fi
 }
 
+unlock_alias_if_possible() {
+  local alias="$1"
+  [ -n "$alias" ] || return 0
+  if [ -x "$GT_DISPATCHER" ]; then
+    "$GT_DISPATCHER" ssh unlock "$alias" >/dev/null 2>&1 || true
+  fi
+}
+
+get_origin_alias() {
+  # Determine HostAlias from origin URL (expects git@<alias>:...)
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    return 1
+  fi
+  local origin
+  origin="$(git remote get-url origin 2>/dev/null || true)"
+  if [ -z "$origin" ]; then
+    return 1
+  fi
+  echo "$origin" | sed -n 's#git@\([^:]*\):.*#\1#p'
+}
+
 clone_with_ssh() {
   local link="$1"
   if [ ! -f "$SSH_CONFIG" ]; then
@@ -110,6 +133,9 @@ clone_with_ssh() {
   local new_link
   new_link=$(echo "$link" | sed "s#git@${orig_host}:#git@${chosen_alias}:#")
   echo "Cloning with SSH key: $chosen_alias"
+  # Attempt to unlock key via vault, if configured
+  echo "Attempting to unlock SSH key '$chosen_alias' via vault..."
+  unlock_alias_if_possible "$chosen_alias"
   git clone "$new_link"
     # Derive repository directory name
     local repo_dir
@@ -129,8 +155,17 @@ main() {
     exit 0
   fi
 
-  # For other git commands, just forward to git
+  # For other git commands, try to unlock the current repo alias first
   if [ "$#" -ge 1 ]; then
+    case "$1" in
+      fetch|pull|push|submodule)
+        local alias
+        alias="$(get_origin_alias || true)"
+        if [ -n "$alias" ]; then
+          unlock_alias_if_possible "$alias"
+        fi
+        ;;
+    esac
     git "$@"
     exit $?
   fi

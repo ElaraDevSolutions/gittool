@@ -69,6 +69,7 @@ Core commands:
 | `gt ssh list` | List Host aliases from `~/.ssh/config`. |
 | `gt ssh show <HostAlias>` | Show details about a configured alias and key. |
 | `gt ssh select` | Switch the current repo's `origin` to a chosen HostAlias. |
+| `gt ssh unlock <HostAlias>` | Unlock the SSH key for a HostAlias using the vault master. |
 | `gt clone <SSH-link>` | Clone using a selected HostAlias. |
 | `gt vault init` | Initialize a local vault and master password (GPG-encrypted). |
 | `gt vault -m` / `gt vault show-master` | Decrypt and print the master password. |
@@ -251,6 +252,22 @@ Return codes / edge cases:
 * Exits with error if not inside a Git repo, if `origin` is missing, or if the current `origin` URL is not SSH format (`git@host:path`).
 * If only one alias exists, it's auto-selected.
 * No changes are made if selection is aborted (ESC/Ctrl-C in `fzf` or empty choice).
+
+7.1) Unlock a key via the vault master (new)
+
+When a HostAlias was created with the vault-enabled `gt ssh add` flow, it is registered under `[vault].ssh_hosts` in `~/.config/gittool/config`. You can later unlock that key in the current session without typing its passphrase:
+
+```bash
+gt ssh unlock personal
+```
+
+Behavior:
+- Finds the `IdentityFile` for the given HostAlias in `~/.ssh/config`.
+- Checks that the alias is listed in `[vault].ssh_hosts`.
+- Calls `gt vault -m` to obtain the master and uses it to run `ssh-add` for that key.
+- If the key is already loaded in `ssh-agent`, it exits without doing anything.
+
+This is useful before running commands like `git clone` or `git fetch` that would otherwise prompt for the key passphrase. Once unlocked, the key remains available to the agent for the rest of the session according to your `ssh-agent` lifetime.
 
 8) Rotate an existing key (new)
 
