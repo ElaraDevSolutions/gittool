@@ -152,6 +152,31 @@ if ! echo "$SECOND_CONTENT" | grep -q '^ssh_hosts=empresa-ssh,pessoal-ssh'; then
 fi
 clean_vault
 
+# --- Test 6 (skipped for now): init with --password should store and show same master ---
+# NOTE: Disabled because in some environments gpg/pinentry may still
+# require interaction even when a password is passed via --password.
+# This would cause the CI to hang. Re-enable once gpg can be fully
+# driven non-interativamente in tests.
+# clean_vault
+# MASTER_PLAIN="my-super-secret-123"
+# TESTS_RUN=$((TESTS_RUN+1))
+# if ! GITTOOL_CONFIG_DIR="$GITTOOL_CONFIG_DIR" bash "$VAULT_SCRIPT" init --password "$MASTER_PLAIN" >/dev/null 2>&1; then
+#   report_fail "vault init --password should succeed in non-interactive mode"
+# else
+#   SHOWN_MASTER="$(bash "$VAULT_SCRIPT" show-master 2>/dev/null || true)"
+#   if [ "$SHOWN_MASTER" != "$MASTER_PLAIN" ]; then
+#     report_fail "vault show-master should return the same value set by --password (expected '$MASTER_PLAIN' got '$SHOWN_MASTER')"
+#   fi
+# fi
+# clean_vault
+
+# --- Test 7: show-master should fail when vault is not initialized ---
+clean_vault
+TESTS_RUN=$((TESTS_RUN+1))
+if bash "$VAULT_SCRIPT" show-master >/dev/null 2>&1; then
+  report_fail "vault show-master should fail when no vault-*.gpg exists"
+fi
+
 # Final summary
 if [ "$FAILURES" -ne 0 ]; then
   echo "vault.sh tests: $FAILURES failures out of $TESTS_RUN checks" >&2
