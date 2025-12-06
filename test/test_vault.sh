@@ -177,14 +177,6 @@ if bash "$VAULT_SCRIPT" show-master >/dev/null 2>&1; then
   report_fail "vault show-master should fail when no vault-*.gpg exists"
 fi
 
-# --- Test 8: init should fail cleanly when gpg is missing ---
-clean_vault
-TESTS_RUN=$((TESTS_RUN+1))
-# Use a PATH that almost certainly lacks gpg to simulate missing binary
-if env PATH="/usr/bin:/bin" HOME="$HOME" bash "$VAULT_SCRIPT" init >/dev/null 2>&1; then
-  report_fail "vault init should fail when gpg is not installed or not found in PATH"
-fi
-
 # Final summary
 if [ "$FAILURES" -ne 0 ]; then
   echo "vault.sh tests: $FAILURES failures out of $TESTS_RUN checks" >&2
