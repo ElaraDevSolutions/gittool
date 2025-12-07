@@ -30,7 +30,7 @@ write_local_vault_config() {
 	# [vault]
 	# provider=local
 	# path=/absolute/path/to/vault-XXXX.gpg
-	# expires=<days>
+	# expires=<iso-date>
 	# ssh_hosts=comma,separated,host,aliases
 	local master_file="$1" expire_days="${2:-0}"
 
@@ -84,9 +84,18 @@ write_local_vault_config() {
 		echo "[vault]"
 		echo "provider=local"
 		echo "path=$master_file"
-		# Write expires only if non-zero or previously set
+		# Write expires date (ISO-8601) only if non-zero or previously set
 		if [ -n "$expire_days" ] && [ "$expire_days" != "0" ]; then
-			echo "expires=$expire_days"
+			# convert number of days to expiration date (YYYY-MM-DD)
+			local expire_date
+			if date -v+1d +%Y-%m-%d >/dev/null 2>&1; then
+				# BSD/macOS date
+				expire_date="$(date -v+"${expire_days}"d +%Y-%m-%d 2>/dev/null || true)"
+			else
+				# GNU date fallback
+				expire_date="$(date -d "+${expire_days} days" +%Y-%m-%d 2>/dev/null || true)"
+			fi
+			[ -n "$expire_date" ] && echo "expires=$expire_date"
 		elif [ -n "$existing_expires" ]; then
 			echo "$existing_expires"
 		fi
