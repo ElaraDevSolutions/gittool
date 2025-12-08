@@ -45,7 +45,7 @@ export GITTOOL_CONFIG_DIR
 
 VAULT_DIR="$GITTOOL_CONFIG_DIR/vault"
 CFG_ROOT="$HOME/.config/gittool"
-CFG_FILE="$CFG_ROOT/config"
+CFG_FILE="$CFG_ROOT/vault"
 
 clean_vault() {
   rm -rf "$VAULT_DIR" || true

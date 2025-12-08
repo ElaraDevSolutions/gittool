@@ -7,7 +7,7 @@ set -euo pipefail
 GITTOOL_CONFIG_DIR="${GITTOOL_CONFIG_DIR:-$HOME/.gittool}"
 VAULT_DIR="$GITTOOL_CONFIG_DIR/vault"
 GITTOOL_CFG_ROOT="${GITTOOL_CFG_ROOT:-$HOME/.config/gittool}"
-GITTOOL_CFG_FILE="$GITTOOL_CFG_ROOT/config"
+GITTOOL_CFG_FILE="$GITTOOL_CFG_ROOT/vault"
 
 usage() {
 	cat <<EOF
@@ -25,7 +25,7 @@ ensure_vault_dir() {
 }
 
 write_local_vault_config() {
-	# Persist local vault provider configuration to ~/.config/gittool/config
+	# Persist local vault provider configuration to ~/.config/gittool/vault
 	# Format (single local provider, always overwritten on init inside [vault] section):
 	# [vault]
 	# provider=local
