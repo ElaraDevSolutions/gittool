@@ -190,9 +190,33 @@ main() {
           fi
 
           if [ "$expires_days" -le 0 ]; then
-            echo "Your vault has expired; please initialize a new vault." >&2
-            echo "Run: gt vault init" >&2
-            return 1
+            echo "Your vault has expired." >&2
+            local current_alias
+            current_alias="$(get_origin_alias || true)"
+
+            if [ -n "$current_alias" ]; then
+                echo "Starting key regeneration flow for alias '$current_alias'..." >&2
+                "$GT_DISPATCHER" ssh add "$current_alias" || return 1
+                echo "" >&2
+                echo "Key regenerated successfully." >&2
+                echo "Please add the new public key (copied to clipboard) to your Git provider settings." >&2
+                echo "After updating the key, run your command again." >&2
+                exit 1
+            else
+                if [ -t 0 ]; then
+                  local days_input=""
+                  read -p "Vault password expiration in days (0 for never): " days_input || true
+                  if [ -n "$days_input" ]; then
+                    "$GT_DISPATCHER" vault update-expiration "$days_input"
+                  else
+                    echo "Vault remains expired. Aborting." >&2
+                    return 1
+                  fi
+                else
+                  echo "Run: gt vault update-expiration <days>" >&2
+                  return 1
+                fi
+            fi
           elif [ "$expires_days" -le "$warn_days" ]; then
             echo "Your vault will expire in $expires_days day(s)." >&2
           fi

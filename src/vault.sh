@@ -24,6 +24,21 @@ ensure_vault_dir() {
 	mkdir -p "$VAULT_DIR"
 }
 
+calculate_expire_date() {
+	local days="$1"
+	if [ -z "$days" ] || [ "$days" = "0" ]; then
+		echo "0"
+		return
+	fi
+	if date -v+1d +%Y-%m-%d >/dev/null 2>&1; then
+		# BSD/macOS date
+		date -v+"${days}"d +%Y-%m-%d 2>/dev/null || echo "0"
+	else
+		# GNU date fallback
+		date -d "+${days} days" +%Y-%m-%d 2>/dev/null || echo "0"
+	fi
+}
+
 write_local_vault_config() {
 	# Persist local vault provider configuration to ~/.config/gittool/vault
 	# Format (single local provider, always overwritten on init inside [vault] section):
@@ -85,17 +100,10 @@ write_local_vault_config() {
 		echo "provider=local"
 		echo "path=$master_file"
 		# Write expires date (ISO-8601) only if non-zero or previously set
-		if [ -n "$expire_days" ] && [ "$expire_days" != "0" ]; then
-			# convert number of days to expiration date (YYYY-MM-DD)
-			local expire_date
-			if date -v+1d +%Y-%m-%d >/dev/null 2>&1; then
-				# BSD/macOS date
-				expire_date="$(date -v+"${expire_days}"d +%Y-%m-%d 2>/dev/null || true)"
-			else
-				# GNU date fallback
-				expire_date="$(date -d "+${expire_days} days" +%Y-%m-%d 2>/dev/null || true)"
-			fi
-			[ -n "$expire_date" ] && echo "expires=$expire_date"
+		local expire_date
+		expire_date="$(calculate_expire_date "$expire_days")"
+		if [ "$expire_date" != "0" ]; then
+			echo "expires=$expire_date"
 		elif [ -n "$existing_expires" ]; then
 			echo "$existing_expires"
 		fi
@@ -159,6 +167,10 @@ vault_init() {
 		# No key found: create a non-interactive RSA key specifically for the vault
 		local key_params
 		key_params="$VAULT_DIR/gpg-key-params.txt"
+
+		local gpg_expire_date
+		gpg_expire_date="$(calculate_expire_date "$expire_days")"
+
 		cat >"$key_params" <<EOF
 Key-Type: RSA
 Key-Length: 3072
@@ -167,7 +179,7 @@ Subkey-Length: 3072
 Name-Real: gittool-vault
 Name-Comment: auto-generated key for gittool vault
 Name-Email: gittool-vault@local
-Expire-Date: $expire_days
+Expire-Date: $gpg_expire_date
 %no-protection
 %commit
 EOF
@@ -288,6 +300,34 @@ vault_show_master() {
 	printf '%s\n' "$value"
 }
 
+vault_update_expiration() {
+	local days="$1"
+	[ -z "$days" ] && return 0
+	
+	local expire_date
+	expire_date="$(calculate_expire_date "$days")"
+	[ -z "$expire_date" ] && return 0
+
+	mkdir -p "$GITTOOL_CFG_ROOT"
+	touch "$GITTOOL_CFG_FILE"
+	
+	if ! grep -qE '^\[vault\]' "$GITTOOL_CFG_FILE" 2>/dev/null; then
+		return 0
+	fi
+
+	if grep -q "^expires=" "$GITTOOL_CFG_FILE"; then
+		awk -v d="$expire_date" '/^expires=/{print "expires=" d; next} {print}' "$GITTOOL_CFG_FILE" > "$GITTOOL_CFG_FILE.tmp" && mv "$GITTOOL_CFG_FILE.tmp" "$GITTOOL_CFG_FILE"
+	else
+		awk -v d="$expire_date" '
+			/^\[vault\]/{print;printed=1;next}
+			printed==1 && !seen && /^\[/{print "expires=" d;seen=1}
+			{print}
+			END{if(printed==1 && !seen)print "expires=" d}
+		' "$GITTOOL_CFG_FILE" >"$GITTOOL_CFG_FILE.tmp" && mv "$GITTOOL_CFG_FILE.tmp" "$GITTOOL_CFG_FILE"
+	fi
+	echo "Vault expiration updated to $expire_date" >&2
+}
+
 main() {
 	local cmd="${1:-help}"
 	shift || true
@@ -298,6 +338,9 @@ main() {
 			;;
 		show-master|--master|-m)
 			vault_show_master "$@"
+			;;
+		update-expiration)
+			vault_update_expiration "$@"
 			;;
 		help|-h|--help)
 			usage

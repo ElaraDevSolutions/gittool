@@ -511,22 +511,30 @@ add_ssh_key() {
 
 	register_key_file() {
 		local keyfile="$1" alias="$2" hostname="$3" do_agent="$4" do_sign="$5" dry_run="$6"
-		if grep -qE "^Host[[:space:]]+${alias}$" "$CONFIG_FILE" 2>/dev/null; then echo "Configuration for '${alias}' already exists in $CONFIG_FILE."; return 0; fi
+		local config_exists=0
+		if grep -qE "^Host[[:space:]]+${alias}$" "$CONFIG_FILE" 2>/dev/null; then
+			echo "Configuration for '${alias}' already exists in $CONFIG_FILE."
+			config_exists=1
+		fi
 		if [ "$dry_run" -eq 1 ]; then
-			echo "[dry-run] Would append Host block for '$alias' to $CONFIG_FILE"
-			echo "[dry-run] Would set IdentityFile $keyfile"
+			if [ "$config_exists" -eq 0 ]; then
+				echo "[dry-run] Would append Host block for '$alias' to $CONFIG_FILE"
+				echo "[dry-run] Would set IdentityFile $keyfile"
+			fi
 			[ "$do_agent" -eq 1 ] && echo "[dry-run] Would ssh-add $keyfile" || echo "[dry-run] Skipping ssh-add (--no-agent)"
 			[ "$do_sign" -eq 1 ] && echo "[dry-run] Would run signing setup" || echo "[dry-run] Skipping signing setup (--no-sign)"
 			return 0
 		fi
-		{
-			echo "Host $alias"
-			echo "  AddKeysToAgent yes"
-			echo "  HostName $hostname"
-			echo "  User git"
-			echo "  IdentityFile $keyfile"
-			echo "  IdentitiesOnly yes"
-		} >> "$CONFIG_FILE"
+		if [ "$config_exists" -eq 0 ]; then
+			{
+				echo "Host $alias"
+				echo "  AddKeysToAgent yes"
+				echo "  HostName $hostname"
+				echo "  User git"
+				echo "  IdentityFile $keyfile"
+				echo "  IdentitiesOnly yes"
+			} >> "$CONFIG_FILE"
+		fi
 		chmod 600 "$keyfile" || true
 		if [ "$do_agent" -eq 1 ]; then
 			if [ -n "${GITTOOL_SSH_SKIP_AGENT_ON_VAULT:-}" ]; then
@@ -606,6 +614,78 @@ add_ssh_key() {
 		register_key_file "$chosen" "$alias" "$HOSTNAME"
 	}
 
+	generate_and_register_key() {
+		local alias="$1" hostname="$2" email="$3" keyfile="$4" use_vault_default="$5" do_agent="$6" do_sign="$7" dry_run="$8"
+
+		# Backup existing key if present
+		if [ -f "$keyfile" ]; then
+			local backup="${keyfile}.old.$(date +%Y%m%d%H%M%S)"
+			echo "Backing up existing key to $backup"
+			if [ "$dry_run" -eq 0 ]; then
+				mv "$keyfile" "$backup"
+				[ -f "${keyfile}.pub" ] && mv "${keyfile}.pub" "${backup}.pub"
+			fi
+		fi
+
+		local use_vault="$use_vault_default"
+		local master=""
+		if [ -z "$use_vault" ]; then
+			if [ -t 0 ]; then
+				read -p "Protect key with vault master secret? [y/N]: " use_vault || true
+			fi
+		fi
+		case "$use_vault" in
+			[yY]|[yY][eE][sS])
+				local user_input=""
+				if [ -t 0 ]; then
+					printf "Enter vault master secret (leave empty to auto-retrieve): "
+					stty -echo 2>/dev/null || true
+					read -r user_input || true
+					stty echo 2>/dev/null || true
+					echo
+				fi
+
+				if [ -n "$user_input" ]; then
+					master="$user_input"
+					ensure_vault_initialized >/dev/null 2>&1 || true
+				else
+					if ensure_vault_initialized; then
+						master="$(get_vault_master || true)"
+					fi
+					if [ -z "$master" ]; then
+						echo "Error: Failed to retrieve vault master secret." >&2
+						exit 1
+					fi
+				fi
+
+				if [ -t 0 ]; then
+					local days_input=""
+					read -p "Vault password expiration in days (0 for never, enter to keep current): " days_input || true
+					if [ -n "$days_input" ]; then
+						GITTOOL_CFG_ROOT="$GITTOOL_CFG_ROOT" GITTOOL_CFG_FILE="$GITTOOL_CFG_FILE" "$(dirname "$0")/vault.sh" update-expiration "$days_input"
+					fi
+				fi
+			;;
+		esac
+
+		echo "Generating SSH key..."
+		if [ "$dry_run" -eq 0 ]; then
+			if [ -n "$master" ]; then
+				echo "Encrypting new SSH key with vault master secret (no passphrase prompt needed)..."
+				ssh-keygen -t ed25519 -C "$email" -f "$keyfile" -N "$master"
+				GITTOOL_SSH_SKIP_AGENT_ON_VAULT=1
+			else
+				ssh-keygen -t ed25519 -C "$email" -f "$keyfile"
+			fi
+			vault_add_ssh_host "$alias" || true
+		fi
+
+		register_key_file "$keyfile" "$alias" "$hostname" "$do_agent" "$do_sign" "$dry_run"
+		if [ -n "${GITTOOL_SSH_SKIP_AGENT_ON_VAULT:-}" ] && [ "$do_agent" -eq 1 ]; then
+			unlock_ssh_key "$alias" || echo "Warning: failed to auto-unlock new key."
+		fi
+	}
+
 	# Non-interactive priority path if flags provided
 	if [ -n "$PATH_ARG" ] || [ -n "$PATTERN_ARG" ] || [ -n "$HOST_ALIAS" ]; then
 		if [ -n "$PATH_ARG" ]; then
@@ -653,69 +733,82 @@ add_ssh_key() {
 
 	# Legacy positional behavior preserved below
 	local ARG="$LEGACY_ARG"
-	if [ -n "$ARG" ]; then
-		local KEY_PATH="$ARG"; KEY_PATH="${KEY_PATH%.pub}"
-		if [ -f "$KEY_PATH" ]; then
-			local BASENAME="$(basename "$KEY_PATH")" HOST_ALIAS
-			if [[ "$BASENAME" == id_ed25519_* ]]; then HOST_ALIAS="${BASENAME#id_ed25519_}"; else HOST_ALIAS="$BASENAME"; fi
-			read -p "HostName (default: github.com): " HOSTNAME; HOSTNAME=${HOSTNAME:-github.com}
-			register_key_file "$KEY_PATH" "$HOST_ALIAS" "$HOSTNAME" "$DO_AGENT" "$DO_SIGN" "$DRY_RUN"
-		else
-			search_and_select_existing_key "$ARG" || exit 1
-		fi
-	else
-		read -p "HostName (default: github.com): " HOSTNAME; HOSTNAME=${HOSTNAME:-github.com}
-		read -p "Key name (e.g.: personal): " HOST_ALIAS; [ -z "${HOST_ALIAS}" ] && { echo "Key name cannot be empty."; exit 1; }
-		if echo "$HOST_ALIAS" | grep -q '[[:space:]]'; then echo "Key name cannot contain spaces."; exit 1; fi
-		local KEYFILE="$SSH_DIR/id_ed25519_${HOST_ALIAS}"
-		if [ -f "$KEYFILE" ]; then
-			echo "SSH key already exists: $KEYFILE"
-		else
-			read -p "Email for the key: " EMAIL; [ -z "${EMAIL}" ] && { echo "Email cannot be empty."; exit 1; }
-			local use_vault="N" master=""
-			if [ -t 0 ]; then
-				read -p "Protect key with vault master secret? [y/N]: " use_vault || true
-			fi
-			case "$use_vault" in
-				[yY]|[yY][eE][sS])
-					local user_input=""
-					if [ -t 0 ]; then
-						printf "Enter vault master secret (leave empty to auto-retrieve): "
-						stty -echo 2>/dev/null || true
-						read -r user_input || true
-						stty echo 2>/dev/null || true
-						echo
-					fi
+	local GEN_ALIAS="" GEN_HOSTNAME="" GEN_EMAIL="" GEN_KEYFILE="" GEN_USE_VAULT_DEFAULT=""
+	local MODE="interactive"
 
-					if [ -n "$user_input" ]; then
-						master="$user_input"
-						# Ensure vault is initialized so mapping can be added later
-						ensure_vault_initialized >/dev/null 2>&1 || true
-					else
-						if ensure_vault_initialized; then
-							master="$(get_vault_master || true)"
-						fi
-						if [ -z "$master" ]; then
-							echo "Error: Failed to retrieve vault master secret." >&2
-							exit 1
-						fi
-					fi
-				;;
-			esac
-			echo "Generating SSH key..."
-			if [ -n "$master" ]; then
-				echo "Encrypting new SSH key with vault master secret (no passphrase prompt needed)..."
-				ssh-keygen -t ed25519 -C "$EMAIL" -f "$KEYFILE" -N "$master"
-				GITTOOL_SSH_SKIP_AGENT_ON_VAULT=1
-			else
-				ssh-keygen -t ed25519 -C "$EMAIL" -f "$KEYFILE"
+	if [ -n "$ARG" ]; then
+		# Check if ARG is an existing alias in config (allow trailing spaces/comments)
+		if grep -qE "^Host[[:space:]]+${ARG}([[:space:]]+.*)?$" "$CONFIG_FILE" 2>/dev/null; then
+			# It is an existing alias: extract details for regeneration
+			GEN_ALIAS="$ARG"
+			local details
+			details="$(awk -v target="$GEN_ALIAS" '
+				/^Host[[:space:]]+/ { in_block = ($2 == target); next }
+				in_block && /^[[:space:]]*HostName[[:space:]]+/ { print $2; next }
+				in_block && /^[[:space:]]*IdentityFile[[:space:]]+/ { print $2; next }
+			' "$CONFIG_FILE" 2>/dev/null | paste -sd' ' - || true)"
+			set -- $details
+			GEN_HOSTNAME="${1:-github.com}"
+			local id_file="${2:-}"
+			if [ -n "$id_file" ]; then
+				# Expand ~ if present
+				if [ "${id_file#~/}" != "$id_file" ]; then id_file="$HOME/${id_file#~/}"; fi
+				GEN_KEYFILE="$id_file"
+				# Try to extract email from pub key
+				if [ -f "${id_file}.pub" ]; then
+					GEN_EMAIL="$(extract_email_from_pub "${id_file}.pub" 2>/dev/null || true)"
+				fi
 			fi
-			vault_add_ssh_host "$HOST_ALIAS" || true
+			[ -z "$GEN_EMAIL" ] && GEN_EMAIL="$(git config user.email 2>/dev/null || true)"
+			
+			# Check if currently in vault
+			if [ -f "$GITTOOL_CFG_FILE" ] && grep -qE '^\[vault\]' "$GITTOOL_CFG_FILE" 2>/dev/null; then
+				local hosts_line
+				hosts_line="$(awk '/^\[vault\]/{in_v=1;next} /^\[/{in_v=0} in_v && /^ssh_hosts=/{print $0;exit}' "$GITTOOL_CFG_FILE" 2>/dev/null || true)"
+				if [[ "$hosts_line" == *"$GEN_ALIAS"* ]]; then
+					GEN_USE_VAULT_DEFAULT="y"
+				fi
+			fi
+
+			echo "Alias '$GEN_ALIAS' already exists."
+			echo "  HostName: $GEN_HOSTNAME"
+			echo "  Email:    ${GEN_EMAIL:-<unknown>}"
+			echo "Regenerating key..."
+			MODE="generate"
+		else
+			local KEY_PATH="$ARG"; KEY_PATH="${KEY_PATH%.pub}"
+			if [ -f "$KEY_PATH" ]; then
+				local BASENAME="$(basename "$KEY_PATH")" HOST_ALIAS
+				if [[ "$BASENAME" == id_ed25519_* ]]; then HOST_ALIAS="${BASENAME#id_ed25519_}"; else HOST_ALIAS="$BASENAME"; fi
+				read -p "HostName (default: github.com): " HOSTNAME; HOSTNAME=${HOSTNAME:-github.com}
+				register_key_file "$KEY_PATH" "$HOST_ALIAS" "$HOSTNAME" "$DO_AGENT" "$DO_SIGN" "$DRY_RUN"
+				return 0
+			else
+				search_and_select_existing_key "$ARG" || exit 1
+				return 0
+			fi
 		fi
-		register_key_file "$KEYFILE" "$HOST_ALIAS" "$HOSTNAME" "$DO_AGENT" "$DO_SIGN" "$DRY_RUN"
-		if [ -n "${GITTOOL_SSH_SKIP_AGENT_ON_VAULT:-}" ] && [ "$DO_AGENT" -eq 1 ]; then
-			unlock_ssh_key "$HOST_ALIAS" || echo "Warning: failed to auto-unlock new key."
+	fi
+
+	if [ "$MODE" = "interactive" ]; then
+		read -p "HostName (default: github.com): " GEN_HOSTNAME; GEN_HOSTNAME=${GEN_HOSTNAME:-github.com}
+		read -p "Key name (e.g.: personal): " GEN_ALIAS; [ -z "${GEN_ALIAS}" ] && { echo "Key name cannot be empty."; exit 1; }
+		if echo "$GEN_ALIAS" | grep -q '[[:space:]]'; then echo "Key name cannot contain spaces."; exit 1; fi
+		GEN_KEYFILE="$SSH_DIR/id_ed25519_${GEN_ALIAS}"
+		
+		if [ -f "$GEN_KEYFILE" ]; then
+			echo "SSH key already exists: $GEN_KEYFILE"
+			# Fallback to register existing if not regenerating
+			register_key_file "$GEN_KEYFILE" "$GEN_ALIAS" "$GEN_HOSTNAME" "$DO_AGENT" "$DO_SIGN" "$DRY_RUN"
+			return 0
+		else
+			read -p "Email for the key: " GEN_EMAIL; [ -z "${GEN_EMAIL}" ] && { echo "Email cannot be empty."; exit 1; }
+			MODE="generate"
 		fi
+	fi
+
+	if [ "$MODE" = "generate" ]; then
+		generate_and_register_key "$GEN_ALIAS" "$GEN_HOSTNAME" "$GEN_EMAIL" "$GEN_KEYFILE" "$GEN_USE_VAULT_DEFAULT" "$DO_AGENT" "$DO_SIGN" "$DRY_RUN"
 	fi
 }
 
