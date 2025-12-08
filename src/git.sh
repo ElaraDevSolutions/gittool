@@ -234,7 +234,7 @@ main() {
       -d) set -- "diff" "${@:2}" ;;
       -a) set -- "add" "${@:2}" ;;
       -p) set -- "pull" "${@:2}" ;;
-      -pp) set -- "push" "${@:2}" ;;
+      -pp|-P) set -- "push" "${@:2}" ;;
       -f) set -- "fetch" "${@:2}" ;;
       -m) set -- "merge" "${@:2}" ;;
       -cm) set -- "commit" "-m" "${@:2}" ;;

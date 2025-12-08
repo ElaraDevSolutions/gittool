@@ -410,7 +410,7 @@ For normal Git commands, `gt` simply forwards to `git`. However, it provides sev
 | `gt -d` | `git diff` |
 | `gt -a` | `git add` |
 | `gt -p` | `git pull` |
-| `gt -pp` | `git push` |
+| `gt -pp` / `gt -P` | `git push` |
 | `gt -f` | `git fetch` |
 | `gt -m` | `git merge` |
 | `gt -cm <msg>` | `git commit -m <msg>` |
