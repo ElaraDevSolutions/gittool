@@ -109,6 +109,18 @@ ensure_ssh_dir_and_config() {
 
 extract_email_from_pub() { grep -E -o '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' "$1" | head -n1 || true; }
 
+get_current_repo_alias() {
+	if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+		local origin_url
+		origin_url="$(git remote get-url origin 2>/dev/null || true)"
+		if [[ "$origin_url" =~ ^git@([^:]+): ]]; then
+			printf '%s' "${BASH_REMATCH[1]}"
+			return 0
+		fi
+	fi
+	return 1
+}
+
 get_identity_file_for_alias() {
 	local alias="$1" identity
 	[ -f "$CONFIG_FILE" ] || return 1
@@ -366,69 +378,36 @@ rotate_ssh_key() {
 			*) [ -z "$HOST_ALIAS" ] && HOST_ALIAS="$1"; shift ;;
 		esac
 	done
-	ensure_ssh_dir_and_config
-	if [ -z "$HOST_ALIAS" ]; then echo "Missing HostAlias."; show_help; return 1; fi
-	if ! grep -qE "^Host[[:space:]]+${HOST_ALIAS}$" "$CONFIG_FILE"; then echo "Host '${HOST_ALIAS}' not found in $CONFIG_FILE."; return 1; fi
-	local identity_file="$(get_identity_file_for_alias "$HOST_ALIAS" || true)"
-	[ -z "$identity_file" ] && { echo "Unable to determine IdentityFile for alias '$HOST_ALIAS'."; return 1; }
-	local backup_suffix="old-$(date +%Y%m%d%H%M%S)"
-	local old_priv="$identity_file" old_pub="${identity_file}.pub" old_pub_content=""
-	[ -f "$old_pub" ] && old_pub_content="$(cat "$old_pub" || true)"
-	local prev_email=""
-	[ -n "$old_pub_content" ] && prev_email="$(echo "$old_pub_content" | grep -E -o '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' | head -n1 || true)"
-	[ -z "$prev_email" ] && prev_email="$(git config user.email 2>/dev/null || true)"
-	echo "Rotating key for alias '$HOST_ALIAS' (IdentityFile: $identity_file)"
-	if [ $DRY_RUN -eq 1 ]; then
-		echo "[dry-run] Would backup private key -> ${old_priv}.${backup_suffix}"
-		[ -f "$old_pub" ] && echo "[dry-run] Would backup public key -> ${old_pub}.${backup_suffix}" || true
-	else
-		[ -f "$old_priv" ] && mv "$old_priv" "${old_priv}.${backup_suffix}" && echo "Backup private key -> ${old_priv}.${backup_suffix}" || true
-		[ -f "$old_pub" ] && mv "$old_pub" "${old_pub}.${backup_suffix}" && echo "Backup public key -> ${old_pub}.${backup_suffix}" || true
-	fi
-	local email="$EMAIL_ARG"
-	if [ -z "$email" ]; then
-		# Non-interactive mode: reuse previous email silently
-		if [ -n "${GITTOOL_NON_INTERACTIVE:-}" ] || [ ! -t 0 ]; then
-			email="$prev_email"
-		else
-			read -p "Email for new key (enter to reuse '${prev_email}'): " email || true
+
+	if [ -z "$HOST_ALIAS" ]; then
+		HOST_ALIAS="$(get_current_repo_alias || true)"
+		if [ -z "$HOST_ALIAS" ]; then
+			echo "Missing HostAlias and not inside a git repo with SSH origin." >&2
+			show_help
+			return 1
 		fi
+		echo "Resolved alias from current repo: $HOST_ALIAS"
 	fi
-	[ -z "$email" ] && email="$prev_email"
-	if [ -z "$email" ]; then echo "Email not provided. Aborting."; [ $DRY_RUN -eq 0 ] && {
-		[ -f "${old_priv}.${backup_suffix}" ] && mv "${old_priv}.${backup_suffix}" "$old_priv" || true
-		[ -f "${old_pub}.${backup_suffix}" ] && mv "${old_pub}.${backup_suffix}" "$old_pub" || true
-	}; return 1; fi
-	local pass_flag="-N ''"
-	if [ -z "${GITTOOL_NON_INTERACTIVE:-}" ] && [ -t 0 ]; then
-		read -p "Add passphrase? [y/N]: " add_pass || true
-		case "$add_pass" in [yY]|[yY][eE][sS]) pass_flag="" ;; esac
-	fi
-	if [ $DRY_RUN -eq 1 ]; then
-		echo "[dry-run] Would generate new key: ssh-keygen -t ed25519 -C '$email' -f '$identity_file'"
-		echo "[dry-run] Would chmod 600 '$identity_file'"
-		[ $DO_AGENT -eq 1 ] && echo "[dry-run] Would ssh-add '$identity_file'" || echo "[dry-run] Skipping agent add (--no-agent)"
-		[ $DO_SIGN -eq 1 ] && echo "[dry-run] Would update allowed_signers & git signing setup" || echo "[dry-run] Skipping signing setup (--no-sign)"
-		echo "[dry-run] Rotation simulated."; return 0
-	fi
-	if ! eval ssh-keygen -t ed25519 -C "$email" -f "$identity_file" $pass_flag; then
-		echo "Falha ao gerar nova chave. Restaurando backups..."
-		[ -f "${old_priv}.${backup_suffix}" ] && mv "${old_priv}.${backup_suffix}" "$old_priv" || true
-		[ -f "${old_pub}.${backup_suffix}" ] && mv "${old_pub}.${backup_suffix}" "$old_pub" || true
+
+	# Ensure the alias exists in config before attempting rotation
+	if ! grep -qE "^Host[[:space:]]+${HOST_ALIAS}([[:space:]]+.*)?$" "$CONFIG_FILE" 2>/dev/null; then
+		echo "Host '${HOST_ALIAS}' not found in $CONFIG_FILE. Cannot rotate." >&2
 		return 1
 	fi
-	chmod 600 "$identity_file" 2>/dev/null || true
-	if [ $DO_AGENT -eq 1 ]; then ssh-add "$identity_file" 2>/dev/null || echo "Warning: ssh-add failed (continuing)" >&2; fi
-	local allowed_file="$HOME/.config/git/allowed_signers"
-	if [ $DO_SIGN -eq 1 ]; then
-		if [ -n "$old_pub_content" ] && [ -f "$allowed_file" ] && grep -Fq "$old_pub_content" "$allowed_file"; then
-			grep -Fv "$old_pub_content" "$allowed_file" > "${allowed_file}.tmp" && mv "${allowed_file}.tmp" "$allowed_file" && echo "Removed old key from allowed_signers." || true
-		fi
-		ensure_signing_setup "$identity_file" || true
+
+	# Construct flags for add_ssh_key
+	local args=()
+	[ "$DO_AGENT" -eq 0 ] && args+=("--no-agent")
+	[ "$DO_SIGN" -eq 0 ] && args+=("--no-sign")
+	[ "$DRY_RUN" -eq 1 ] && args+=("--dry-run")
+	[ -n "$EMAIL_ARG" ] && args+=("--email" "$EMAIL_ARG")
+
+	# Call add_ssh_key to handle regeneration (which includes vault support, backups, etc.)
+	if [ ${#args[@]} -eq 0 ]; then
+		add_ssh_key "$HOST_ALIAS"
 	else
-		echo "(--no-sign) Skipping signing setup.";
+		add_ssh_key "${args[@]}" "$HOST_ALIAS"
 	fi
-	echo "Rotation completed for alias '$HOST_ALIAS'."
 }
 
 list_host_aliases() {
@@ -869,19 +848,9 @@ ensure_signing_setup() {
 		ensure_ssh_dir_and_config
 
 		if [ -z "$HOST_ALIAS" ]; then
-			# Try to deduce from current git repo
-			if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-				local origin_url
-				origin_url="$(git remote get-url origin 2>/dev/null || true)"
-				if [[ "$origin_url" =~ ^git@([^:]+): ]]; then
-					HOST_ALIAS="${BASH_REMATCH[1]}"
-				else
-					echo "Current repository origin is not an SSH URL or could not be parsed." >&2
-					echo "Usage: gt ssh copy <HostAlias>" >&2
-					return 1
-				fi
-			else
-				echo "Not inside a git repository and no HostAlias provided." >&2
+			HOST_ALIAS="$(get_current_repo_alias || true)"
+			if [ -z "$HOST_ALIAS" ]; then
+				echo "Missing HostAlias and not inside a git repo with SSH origin." >&2
 				echo "Usage: gt ssh copy <HostAlias>" >&2
 				return 1
 			fi
