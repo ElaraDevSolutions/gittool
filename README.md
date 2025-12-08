@@ -67,6 +67,7 @@ Core commands:
 | `gt ssh remove <HostAlias>` | Remove key files and the Host block for the alias. |
 | `gt ssh rotate [flags] <HostAlias>` | Rotate keys while keeping the same HostAlias. |
 | `gt ssh list` | List Host aliases from `~/.ssh/config`. |
+| `gt ssh copy [HostAlias]` | Copy public key to clipboard (default: current repo origin). |
 | `gt ssh show <HostAlias>` | Show details about a configured alias and key. |
 | `gt ssh select` | Switch the current repo's `origin` to a chosen HostAlias. |
 | `gt ssh unlock <HostAlias>` | Unlock the SSH key for a HostAlias using the vault master. |
@@ -269,7 +270,19 @@ Behavior:
 
 This is useful before running commands like `git clone` or `git fetch` that would otherwise prompt for the key passphrase. Once unlocked, the key remains available to the agent for the rest of the session according to your `ssh-agent` lifetime.
 
-8) Rotate an existing key (new)
+8) Copy public key to clipboard
+
+Use `gt ssh copy` (or `gt ssh -c`) to copy the public key content to your clipboard, making it easy to paste into GitHub/GitLab settings.
+
+```bash
+# Copy key for the current repository's origin
+gt ssh copy
+
+# Copy key for a specific alias
+gt ssh copy personal
+```
+
+9) Rotate an existing key (new)
 
 Use this to periodically replace a key while keeping the same HostAlias (remotes like `git@alias:org/repo.git` keep working):
 
@@ -397,6 +410,31 @@ Example flow (multiple keys configured):
 - The `ssh.sh` helper is primarily interactive for the `add` flow. In CI or automation you can pre-generate keys and append Host blocks to `~/.ssh/config` directly (the test suite uses this approach). The helper supports passing an existing key path to `gt ssh add` but it may still prompt for HostName.
 - The helper tolerates `ssh-agent` not being present; `ssh-add` warnings are non-fatal. For CI ensure your runner has the right key permissions (600) and that `~/.ssh` exists.
 - Set environment variable `GITTOOL_NON_INTERACTIVE=1` to suppress email & passphrase prompts during `gt ssh rotate` (it auto reuses previous email and skips passphrase query). This is useful for unattended rotations. For `add`, supplying the needed flags (`--alias`, `--email`, etc.) already avoids prompts.
+
+### Git wrapper & shortcuts
+
+For normal Git commands, `gt` simply forwards to `git`. However, it provides several shortcuts for common operations:
+
+| Shortcut | Expands to |
+|---|---|
+| `gt -c` | `git checkout` |
+| `gt -b` | `git branch` |
+| `gt -s` | `git status` |
+| `gt -d` | `git diff` |
+| `gt -a` | `git add` |
+| `gt -p` | `git pull` |
+| `gt -pp` / `gt -P` | `git push` |
+| `gt -f` | `git fetch` |
+| `gt -m` | `git merge` |
+| `gt -cm <msg>` | `git commit -m <msg>` |
+| `gt -cam <msg>` | `git commit -am <msg>` |
+
+Example usage:
+```bash
+gt -c -b new-feature   # git checkout -b new-feature
+gt -s                  # git status
+gt -cm "Initial commit" # git commit -m "Initial commit"
+```
 
 ### Doctor command
 
