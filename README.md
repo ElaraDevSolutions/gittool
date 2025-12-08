@@ -398,6 +398,31 @@ Example flow (multiple keys configured):
 - The helper tolerates `ssh-agent` not being present; `ssh-add` warnings are non-fatal. For CI ensure your runner has the right key permissions (600) and that `~/.ssh` exists.
 - Set environment variable `GITTOOL_NON_INTERACTIVE=1` to suppress email & passphrase prompts during `gt ssh rotate` (it auto reuses previous email and skips passphrase query). This is useful for unattended rotations. For `add`, supplying the needed flags (`--alias`, `--email`, etc.) already avoids prompts.
 
+### Git wrapper & shortcuts
+
+For normal Git commands, `gt` simply forwards to `git`. However, it provides several shortcuts for common operations:
+
+| Shortcut | Expands to |
+|---|---|
+| `gt -c` | `git checkout` |
+| `gt -b` | `git branch` |
+| `gt -s` | `git status` |
+| `gt -d` | `git diff` |
+| `gt -a` | `git add` |
+| `gt -p` | `git pull` |
+| `gt -pp` | `git push` |
+| `gt -f` | `git fetch` |
+| `gt -m` | `git merge` |
+| `gt -cm <msg>` | `git commit -m <msg>` |
+| `gt -cam <msg>` | `git commit -am <msg>` |
+
+Example usage:
+```bash
+gt -c -b new-feature   # git checkout -b new-feature
+gt -s                  # git status
+gt -cm "Initial commit" # git commit -m "Initial commit"
+```
+
 ### Doctor command
 
 Use `gt doctor` for a quick health check of your environment:

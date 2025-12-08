@@ -225,6 +225,23 @@ main() {
     fi
   fi
 
+  # Expand shortcuts
+  if [ "$#" -ge 1 ]; then
+    case "$1" in
+      -c) set -- "checkout" "${@:2}" ;;
+      -b) set -- "branch" "${@:2}" ;;
+      -s) set -- "status" "${@:2}" ;;
+      -d) set -- "diff" "${@:2}" ;;
+      -a) set -- "add" "${@:2}" ;;
+      -p) set -- "pull" "${@:2}" ;;
+      -pp) set -- "push" "${@:2}" ;;
+      -f) set -- "fetch" "${@:2}" ;;
+      -m) set -- "merge" "${@:2}" ;;
+      -cm) set -- "commit" "-m" "${@:2}" ;;
+      -cam) set -- "commit" "-am" "${@:2}" ;;
+    esac
+  fi
+
   if [ "$#" -ge 2 ] && [ "$1" = "clone" ]; then
     local link="$2"
     if [[ ! "$link" =~ ^git@ ]]; then
