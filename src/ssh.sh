@@ -10,7 +10,7 @@ GITTOOL_CFG_FILE="$GITTOOL_CFG_ROOT/vault"
 
 get_vault_master() {
 	local master
-	if ! master="$(GITTOOL_CFG_ROOT="$GITTOOL_CFG_ROOT" GITTOOL_CFG_FILE="$GITTOOL_CFG_FILE" "$(dirname "$0")/vault.sh" -m 2>/dev/null)"; then
+	if ! master="$(GITTOOL_CFG_ROOT="$GITTOOL_CFG_ROOT" GITTOOL_CFG_FILE="$GITTOOL_CFG_FILE" "$(dirname "$0")/vault.sh" -m)"; then
 		return 1
 	fi
 	[ -n "$master" ] || return 1
@@ -528,8 +528,12 @@ add_ssh_key() {
 			echo "  IdentitiesOnly yes"
 		} >> "$CONFIG_FILE"
 		chmod 600 "$keyfile" || true
-		if [ "$do_agent" -eq 1 ] && [ -z "${GITTOOL_SSH_SKIP_AGENT_ON_VAULT:-}" ]; then
-			ssh-add "$keyfile" 2>/dev/null && echo "Key added to ssh-agent: $keyfile" || echo "Warning: ssh-add failed for $keyfile (continuing)" >&2
+		if [ "$do_agent" -eq 1 ]; then
+			if [ -n "${GITTOOL_SSH_SKIP_AGENT_ON_VAULT:-}" ]; then
+				echo "Skipping direct ssh-add (will attempt vault unlock)..."
+			else
+				ssh-add "$keyfile" 2>/dev/null && echo "Key added to ssh-agent: $keyfile" || echo "Warning: ssh-add failed for $keyfile (continuing)" >&2
+			fi
 		else
 			echo "(--no-agent) Skipping ssh-add"
 		fi
@@ -670,28 +674,48 @@ add_ssh_key() {
 			read -p "Email for the key: " EMAIL; [ -z "${EMAIL}" ] && { echo "Email cannot be empty."; exit 1; }
 			local use_vault="N" master=""
 			if [ -t 0 ]; then
-				read -p "Use vault master as SSH key passphrase? [y/N]: " use_vault || true
+				read -p "Protect key with vault master secret? [y/N]: " use_vault || true
 			fi
 			case "$use_vault" in
 				[yY]|[yY][eE][sS])
-					if ensure_vault_initialized; then
-						master="$(get_vault_master 2>/dev/null || true)"
+					local user_input=""
+					if [ -t 0 ]; then
+						printf "Enter vault master secret (leave empty to auto-retrieve): "
+						stty -echo 2>/dev/null || true
+						read -r user_input || true
+						stty echo 2>/dev/null || true
+						echo
 					fi
-					if [ -z "$master" ]; then
-						echo "Vault master not available; generating key without passphrase."
+
+					if [ -n "$user_input" ]; then
+						master="$user_input"
+						# Ensure vault is initialized so mapping can be added later
+						ensure_vault_initialized >/dev/null 2>&1 || true
+					else
+						if ensure_vault_initialized; then
+							master="$(get_vault_master || true)"
+						fi
+						if [ -z "$master" ]; then
+							echo "Error: Failed to retrieve vault master secret." >&2
+							exit 1
+						fi
 					fi
 				;;
 			esac
 			echo "Generating SSH key..."
 			if [ -n "$master" ]; then
+				echo "Encrypting new SSH key with vault master secret (no passphrase prompt needed)..."
 				ssh-keygen -t ed25519 -C "$EMAIL" -f "$KEYFILE" -N "$master"
 				GITTOOL_SSH_SKIP_AGENT_ON_VAULT=1
 			else
-				ssh-keygen -t ed25519 -C "$EMAIL" -f "$KEYFILE" -N ""
+				ssh-keygen -t ed25519 -C "$EMAIL" -f "$KEYFILE"
 			fi
 			vault_add_ssh_host "$HOST_ALIAS" || true
 		fi
 		register_key_file "$KEYFILE" "$HOST_ALIAS" "$HOSTNAME" "$DO_AGENT" "$DO_SIGN" "$DRY_RUN"
+		if [ -n "${GITTOOL_SSH_SKIP_AGENT_ON_VAULT:-}" ] && [ "$DO_AGENT" -eq 1 ]; then
+			unlock_ssh_key "$HOST_ALIAS" || echo "Warning: failed to auto-unlock new key."
+		fi
 	fi
 }
 
