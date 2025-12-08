@@ -67,6 +67,7 @@ Core commands:
 | `gt ssh remove <HostAlias>` | Remove key files and the Host block for the alias. |
 | `gt ssh rotate [flags] <HostAlias>` | Rotate keys while keeping the same HostAlias. |
 | `gt ssh list` | List Host aliases from `~/.ssh/config`. |
+| `gt ssh copy [HostAlias]` | Copy public key to clipboard (default: current repo origin). |
 | `gt ssh show <HostAlias>` | Show details about a configured alias and key. |
 | `gt ssh select` | Switch the current repo's `origin` to a chosen HostAlias. |
 | `gt ssh unlock <HostAlias>` | Unlock the SSH key for a HostAlias using the vault master. |
@@ -269,7 +270,19 @@ Behavior:
 
 This is useful before running commands like `git clone` or `git fetch` that would otherwise prompt for the key passphrase. Once unlocked, the key remains available to the agent for the rest of the session according to your `ssh-agent` lifetime.
 
-8) Rotate an existing key (new)
+8) Copy public key to clipboard
+
+Use `gt ssh copy` (or `gt ssh -c`) to copy the public key content to your clipboard, making it easy to paste into GitHub/GitLab settings.
+
+```bash
+# Copy key for the current repository's origin
+gt ssh copy
+
+# Copy key for a specific alias
+gt ssh copy personal
+```
+
+9) Rotate an existing key (new)
 
 Use this to periodically replace a key while keeping the same HostAlias (remotes like `git@alias:org/repo.git` keep working):
 

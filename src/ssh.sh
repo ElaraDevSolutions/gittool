@@ -78,6 +78,7 @@ Commands (shortcuts):
   remove (-r) <HostAlias>         Remove key files and its Host block.
   rotate (-R) <HostAlias> [flags] Rotate (replace) key for existing HostAlias.
   list   (-l)                     List configured Host aliases.
+  copy   (-c) [HostAlias]         Copy public key to clipboard (default: current repo origin).
   select                          Rewrite current repo origin to chosen HostAlias.
   sign-status                     Show if signing key is in allowed_signers.
   show   (-s) <HostAlias>         Show details about a configured SSH key.
@@ -863,6 +864,74 @@ ensure_signing_setup() {
 			echo "Status: key IS in allowed_signers ($allowed_file)"; else echo "Status: key NOT in allowed_signers"; fi
 	}
 
+	copy_ssh_key() {
+		local HOST_ALIAS="$1"
+		ensure_ssh_dir_and_config
+
+		if [ -z "$HOST_ALIAS" ]; then
+			# Try to deduce from current git repo
+			if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+				local origin_url
+				origin_url="$(git remote get-url origin 2>/dev/null || true)"
+				if [[ "$origin_url" =~ ^git@([^:]+): ]]; then
+					HOST_ALIAS="${BASH_REMATCH[1]}"
+				else
+					echo "Current repository origin is not an SSH URL or could not be parsed." >&2
+					echo "Usage: gt ssh copy <HostAlias>" >&2
+					return 1
+				fi
+			else
+				echo "Not inside a git repository and no HostAlias provided." >&2
+				echo "Usage: gt ssh copy <HostAlias>" >&2
+				return 1
+			fi
+		fi
+
+		if ! grep -qE "^Host[[:space:]]+${HOST_ALIAS}$" "$CONFIG_FILE" 2>/dev/null; then
+			echo "Host '${HOST_ALIAS}' not found in $CONFIG_FILE." >&2
+			return 1
+		fi
+
+		local identity_file
+		identity_file="$(get_identity_file_for_alias "$HOST_ALIAS" || true)"
+		if [ -z "$identity_file" ]; then
+			echo "Could not determine IdentityFile for alias '$HOST_ALIAS'." >&2
+			return 1
+		fi
+
+		local identity_abs="$identity_file"
+		if [ -n "$identity_abs" ] && [ "${identity_abs#~/}" != "$identity_abs" ]; then
+			identity_abs="$HOME/${identity_abs#~/}"
+		fi
+
+		local pub_file="${identity_abs}.pub"
+		if [ ! -f "$pub_file" ]; then
+			echo "Public key file not found: $pub_file" >&2
+			return 1
+		fi
+
+		local copied=0
+		if command -v pbcopy >/dev/null 2>&1; then
+			cat "$pub_file" | pbcopy 2>/dev/null || true
+			copied=1
+		elif command -v xclip >/dev/null 2>&1; then
+			cat "$pub_file" | xclip -selection clipboard 2>/dev/null || true
+			copied=1
+		elif command -v xsel >/dev/null 2>&1; then
+			cat "$pub_file" | xsel --clipboard --input 2>/dev/null || true
+			copied=1
+		fi
+
+		if [ "$copied" -eq 1 ]; then
+			printf '\033[1m%s\033[0m\n' "Public key for '$HOST_ALIAS' copied to clipboard."
+			printf '\033[1m%s\033[0m\n' "You can now paste it into your Git provider settings."
+		else
+			echo "Clipboard tool (pbcopy, xclip, xsel) not found." >&2
+			echo "Public key content ($pub_file):"
+			cat "$pub_file"
+		fi
+	}
+
 	main() {
 		if [ $# -eq 0 ]; then show_help; exit 0; fi
 		case "$1" in
@@ -872,6 +941,7 @@ ensure_signing_setup() {
 			list|-l) list_host_aliases ;;
 			sign-status) sign_status ;;
 			show|-s) shift || true; show_ssh_key_details "${1:-}" ;;
+			copy|-c) shift || true; copy_ssh_key "${1:-}" ;;
 			unlock) shift || true; unlock_ssh_key "${1:-}" ;;
 			select)
 				shift || true
