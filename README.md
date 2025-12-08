@@ -389,6 +389,25 @@ gt vault init -p "$SOME_SECRET"   # explicit master
 
 - The tests in `test/test_vault.sh` run entirely non-interactively by piping empty lines into `vault.sh` and asserting that a master is generated and that vault initialization is idempotent.
 
+### Bitwarden Integration
+
+You can optionally integrate with Bitwarden to use it as a vault provider.
+
+- **Enable**:
+  ```bash
+  gt vault --enable-bitwarden
+  ```
+  This will prompt you to log in to Bitwarden (`bw login`). The session key will be extracted and **encrypted with your GPG key** (just like the local vault master) and stored in `~/.gittool/vault/bw-session-*.gpg`.
+
+- **Disable**:
+  ```bash
+  gt vault --disable-bitwarden
+  ```
+  This logs out of Bitwarden and removes the encrypted session file.
+
+- **Usage**:
+  When Bitwarden is enabled, `gt vault init` will prompt you to choose between the `local` provider (default) and `bitwarden`.
+
 
 ## Cloning with a chosen HostAlias
 

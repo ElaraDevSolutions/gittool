@@ -115,6 +115,30 @@ write_local_vault_config() {
 }
 
 vault_init() {
+	local general_cfg="$GITTOOL_CFG_ROOT/config"
+	if [ -f "$general_cfg" ] && grep -qE "^bitwarden=true" "$general_cfg"; then
+		local provider="local"
+		if command -v fzf >/dev/null 2>&1; then
+			provider="$(printf "local\nbitwarden" | fzf --height=20% --layout=reverse --border --prompt="Vault Provider> ")"
+		else
+			echo "Select Vault Provider:" >&2
+			PS3="Enter number> "
+			select p in "local" "bitwarden"; do
+				if [ -n "$p" ]; then
+					provider="$p"
+					break
+				else
+					echo "Invalid selection." >&2
+				fi
+			done
+		fi
+
+		if [ "$provider" = "bitwarden" ]; then
+			echo "Bitwarden provider selected."
+			return 0
+		fi
+	fi
+
 	# Prevent re-init if there's already a vault file
 	if [ -d "$VAULT_DIR" ] && ls "$VAULT_DIR"/vault-*.gpg >/dev/null 2>&1; then
 		echo "Vault is already initialized in $VAULT_DIR" >&2
@@ -328,6 +352,192 @@ vault_update_expiration() {
 	echo "Vault expiration updated to $expire_date" >&2
 }
 
+vault_set_bitwarden() {
+	local enabled="$1"
+	local general_cfg="$GITTOOL_CFG_ROOT/config"
+	mkdir -p "$GITTOOL_CFG_ROOT"
+	[ -f "$general_cfg" ] || touch "$general_cfg"
+
+	local current_status="false"
+	if grep -q "^bitwarden=true" "$general_cfg"; then
+		current_status="true"
+	fi
+
+	if [ "$enabled" = "true" ] && [ "$current_status" = "true" ]; then
+		echo "Bitwarden integration is already enabled."
+		return 1
+	fi
+
+	if grep -q "^bitwarden=" "$general_cfg"; then
+		# Replace existing line
+		if [ "$(uname)" = "Darwin" ]; then
+			sed -i '' "s/^bitwarden=.*/bitwarden=$enabled/" "$general_cfg"
+		else
+			sed -i "s/^bitwarden=.*/bitwarden=$enabled/" "$general_cfg"
+		fi
+	else
+		# Append new line
+		echo "bitwarden=$enabled" >> "$general_cfg"
+	fi
+	echo "Bitwarden integration set to: $enabled"
+}
+
+write_bitwarden_config() {
+	local encrypted_path="$1"
+	mkdir -p "$GITTOOL_CFG_ROOT"
+	local tmp
+	tmp="$(mktemp)"
+
+	if [ -f "$GITTOOL_CFG_FILE" ]; then
+		awk '
+			BEGIN { in_bw=0; n=0 }
+			/^[[]bitwarden[]]/ { in_bw=1; next }
+			/^[[][^]]+[]]/ { in_bw=0 }
+			in_bw==0 { lines[n++] = $0 }
+			END {
+				last = n - 1
+				while (last >= 0 && lines[last] == "") { last-- }
+				for (i = 0; i <= last; i++) {
+					print lines[i]
+				}
+			}
+		' "$GITTOOL_CFG_FILE" > "$tmp"
+	else
+		touch "$tmp"
+	fi
+
+	{
+		if [ -s "$tmp" ]; then
+			cat "$tmp"
+			echo ""
+		fi
+		echo "[bitwarden]"
+		echo "provider=bitwarden"
+		echo "path=$encrypted_path"
+	} > "$GITTOOL_CFG_FILE"
+	rm -f "$tmp"
+}
+
+configure_bitwarden() {
+	if ! command -v bw >/dev/null 2>&1; then
+		echo "Error: 'bw' (Bitwarden CLI) is not installed." >&2
+		echo "Please install it first: https://bitwarden.com/help/cli/" >&2
+		return 1
+	fi
+
+	# Check status to see if we need to logout first
+	local status_out
+	status_out="$(bw status 2>/dev/null || true)"
+	if echo "$status_out" | grep -qE '"status":"(locked|unlocked)"'; then
+		echo "You are already logged in. Logging out to start fresh session..."
+		bw logout
+	fi
+
+	echo "Logging in to Bitwarden..."
+	local login_log
+	login_log="$(mktemp)"
+
+	# Run login, capture output to file (hiding stdout from user to suppress session key message)
+	# Prompts should appear on stderr/tty.
+	if ! bw login > "$login_log"; then
+		echo "Bitwarden login failed." >&2
+		rm -f "$login_log"
+		return 1
+	fi
+
+	local session_key
+	# Extract session key: $ export BW_SESSION="<KEY>"
+	session_key="$(grep 'export BW_SESSION=' "$login_log" | cut -d'"' -f2)"
+	rm -f "$login_log"
+
+	if [ -z "$session_key" ]; then
+		echo "Could not extract BW_SESSION from login output." >&2
+		return 1
+	fi
+
+	# Encrypt session key
+	ensure_vault_dir
+	if ! command -v gpg >/dev/null 2>&1; then
+		echo "Error: gpg is required for encryption." >&2
+		return 1
+	fi
+
+	local key_id
+	key_id="$(gpg --list-keys --with-colons 2>/dev/null | awk -F: '/^pub/ {print $5; exit}')"
+	if [ -z "$key_id" ]; then
+		echo "Error: No GPG key found to encrypt Bitwarden session." >&2
+		echo "Please run 'gt vault init' first to generate/select a key." >&2
+		return 1
+	fi
+
+	local file_id
+	if command -v openssl >/dev/null 2>&1; then
+		file_id="$(openssl rand -hex 8)"
+	else
+		file_id="$(date +%s)"
+	fi
+	local session_file="$VAULT_DIR/bw-session-${file_id}.gpg"
+
+	printf "%s" "$session_key" | gpg --batch --yes \
+		--encrypt --armor \
+		-r "$key_id" \
+		-o "$session_file"
+
+	if [ ! -s "$session_file" ]; then
+		echo "Error: failed to encrypt Bitwarden session." >&2
+		return 1
+	fi
+
+	write_bitwarden_config "$session_file"
+	echo "Bitwarden session key encrypted and stored in $GITTOOL_CFG_FILE"
+}
+
+remove_bitwarden_config() {
+	if [ -f "$GITTOOL_CFG_FILE" ]; then
+		local tmp
+		tmp="$(mktemp)"
+		awk '
+			BEGIN { in_bw=0; n=0 }
+			/^[[]bitwarden[]]/ { in_bw=1; next }
+			/^[[][^]]+[]]/ { in_bw=0 }
+			in_bw==0 { lines[n++] = $0 }
+			END {
+				last = n - 1
+				while (last >= 0 && lines[last] == "") { last-- }
+				for (i = 0; i <= last; i++) {
+					print lines[i]
+				}
+			}
+		' "$GITTOOL_CFG_FILE" > "$tmp" && mv "$tmp" "$GITTOOL_CFG_FILE"
+	fi
+}
+
+deconfigure_bitwarden() {
+	if command -v bw >/dev/null 2>&1; then
+		echo "Logging out from Bitwarden..."
+		bw logout 2>/dev/null || true
+	fi
+
+	# Find and remove the encrypted session file
+	local bw_path
+	if [ -f "$GITTOOL_CFG_FILE" ]; then
+		bw_path="$(awk '
+			BEGIN { in_bw=0 }
+			/^[[]bitwarden[]]/ { in_bw=1; next }
+			/^[[][^]]+[]]/ { in_bw=0 }
+			in_bw==1 && /^path=/ { print substr($0, 6); exit }
+		' "$GITTOOL_CFG_FILE")"
+	fi
+
+	remove_bitwarden_config
+
+	if [ -n "$bw_path" ] && [ -f "$bw_path" ]; then
+		rm -f "$bw_path"
+		echo "Removed encrypted session file: $bw_path"
+	fi
+	echo "Bitwarden configuration removed from $GITTOOL_CFG_FILE"
+}
+
 main() {
 	local cmd="${1:-help}"
 	shift || true
@@ -341,6 +551,15 @@ main() {
 			;;
 		update-expiration)
 			vault_update_expiration "$@"
+			;;
+		--enable-bitwarden)
+			if vault_set_bitwarden "true"; then
+				configure_bitwarden
+			fi
+			;;
+		--disable-bitwarden)
+			vault_set_bitwarden "false"
+			deconfigure_bitwarden
 			;;
 		help|-h|--help)
 			usage
