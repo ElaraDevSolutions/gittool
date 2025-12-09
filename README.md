@@ -407,6 +407,12 @@ You can optionally integrate with Bitwarden to use it as a vault provider.
 
 - **Usage**:
   When Bitwarden is enabled, `gt vault init` will prompt you to choose between the `local` provider (default) and `bitwarden`.
+  
+  Also, when generating a new SSH key with `gt ssh add`, you can select `bitwarden` as the vault provider. This will:
+  1. Generate a random passphrase for the key.
+  2. Create a new Login item in Bitwarden with the key name, email, and passphrase.
+  3. Encrypt the Bitwarden Item ID locally (so `gt` can find it later).
+
 
 
 ## Cloning with a chosen HostAlias
