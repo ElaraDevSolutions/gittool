@@ -34,41 +34,60 @@ ensure_vault_initialized() {
 
 vault_add_ssh_host() {
 	local alias="$1"
+	local section="${2:-vault}"
 	[ -n "$alias" ] || return 0
 	mkdir -p "$GITTOOL_CFG_ROOT"
 	touch "$GITTOOL_CFG_FILE"
-	local has_vault existing line
-	has_vault=0
-	if grep -qE '^\[vault\]' "$GITTOOL_CFG_FILE" 2>/dev/null; then
-		has_vault=1
+	
+	local section_header="[$section]"
+	local has_section=0
+	if grep -Fq "$section_header" "$GITTOOL_CFG_FILE" 2>/dev/null; then
+		has_section=1
 	fi
-	if [ $has_vault -eq 0 ]; then
-		# No vault config yet; do not create it implicitly
+	
+	if [ $has_section -eq 0 ]; then
 		return 0
 	fi
-	existing="$(awk '/^\[vault\]/{in_v=1;next} /^\[/{in_v=0} in_v && /^ssh_hosts=/{print $0;exit}' "$GITTOOL_CFG_FILE" 2>/dev/null || true)"
+
+	local existing
+	existing="$(awk -v sec="$section_header" '
+		$0 == sec {in_sec=1; next}
+		/^\[/ {in_sec=0}
+		in_sec && /^ssh_hosts=/ {print $0; exit}
+	' "$GITTOOL_CFG_FILE" 2>/dev/null || true)"
+
 	if [ -z "$existing" ]; then
-		# Append ssh_hosts line inside existing [vault] block
-		awk -v a="$alias" '
-			/^\[vault\]/{print;printed=1;next}
-			printed==1 && !seen && /^\[/{print "ssh_hosts=" a;seen=1}
+		# Append ssh_hosts line inside existing section block
+		awk -v a="$alias" -v sec="$section_header" '
+			$0 == sec {print; printed=1; next}
+			printed==1 && !seen && /^\[/ {print "ssh_hosts=" a; seen=1}
 			{print}
-			END{if(printed==1 && !seen)print "ssh_hosts=" a}
+			END {if(printed==1 && !seen) print "ssh_hosts=" a}
 		' "$GITTOOL_CFG_FILE" >"$GITTOOL_CFG_FILE.tmp" && mv "$GITTOOL_CFG_FILE.tmp" "$GITTOOL_CFG_FILE"
 		return 0
 	fi
-	line="${existing#ssh_hosts=}"
+
+	local line="${existing#ssh_hosts=}"
 	IFS=',' read -r -a hosts <<<"$line"
 	local h
 	for h in "${hosts[@]:-}"; do
 		[ "$h" = "$alias" ] && return 0
 	done
+
+	local new_line
 	if [ -z "$line" ]; then
 		new_line="ssh_hosts=$alias"
 	else
 		new_line="ssh_hosts=${line},$alias"
 	fi
-	awk -v old="$existing" -v neu="$new_line" '{gsub(old,neu);print}' "$GITTOOL_CFG_FILE" >"$GITTOOL_CFG_FILE.tmp" && mv "$GITTOOL_CFG_FILE.tmp" "$GITTOOL_CFG_FILE"
+	
+	# Use awk to replace only within the correct section
+	awk -v sec="$section_header" -v old="$existing" -v neu="$new_line" '
+		$0 == sec {in_sec=1}
+		/^\[/ && $0 != sec {in_sec=0}
+		in_sec && $0 == old {print neu; next}
+		{print}
+	' "$GITTOOL_CFG_FILE" >"$GITTOOL_CFG_FILE.tmp" && mv "$GITTOOL_CFG_FILE.tmp" "$GITTOOL_CFG_FILE"
 }
 
 show_help() {
@@ -609,43 +628,214 @@ add_ssh_key() {
 
 		local use_vault="$use_vault_default"
 		local master=""
+		local vault_provider="local"
+
+		# Check if Bitwarden is enabled
+		local bw_enabled=0
+		if grep -q "^bitwarden=true" "$GITTOOL_CFG_ROOT/config" 2>/dev/null; then
+			bw_enabled=1
+		fi
+
 		if [ -z "$use_vault" ]; then
-			if [ -t 0 ]; then
-				read -p "Protect key with vault master secret? [y/N]: " use_vault || true
+			if [ "$bw_enabled" -eq 1 ]; then
+				if [ -t 0 ]; then
+					if command -v fzf >/dev/null 2>&1; then
+						local p
+						p="$(printf "local\nbitwarden\nnone" | fzf --height=20% --layout=reverse --border --prompt="Vault Provider> ")"
+						case "$p" in
+							local) use_vault="yes"; vault_provider="local" ;;
+							bitwarden) use_vault="yes"; vault_provider="bitwarden" ;;
+							none) use_vault="no" ;;
+							*) echo "No selection made."; return 1 ;;
+						esac
+					else
+						echo "Select Vault Provider for this key:"
+						select p in "local" "bitwarden" "none"; do
+							case "$p" in
+								local) use_vault="yes"; vault_provider="local"; break ;;
+								bitwarden) use_vault="yes"; vault_provider="bitwarden"; break ;;
+								none) use_vault="no"; break ;;
+								*) echo "Invalid selection.";;
+							esac
+						done
+					fi
+				fi
+			else
+				if [ -t 0 ]; then
+					read -p "Protect key with vault master secret? [y/N]: " use_vault || true
+				fi
 			fi
 		fi
 		case "$use_vault" in
 			[yY]|[yY][eE][sS])
-				local user_input=""
-				if [ -t 0 ]; then
-					printf "Enter vault master secret (leave empty to auto-retrieve): "
-					stty -echo 2>/dev/null || true
-					read -r user_input || true
-					stty echo 2>/dev/null || true
-					echo
-				fi
-
-				if [ -n "$user_input" ]; then
-					master="$user_input"
-					ensure_vault_initialized >/dev/null 2>&1 || true
-				else
-					if ensure_vault_initialized; then
-						master="$(get_vault_master || true)"
-					fi
-					if [ -z "$master" ]; then
-						echo "Error: Failed to retrieve vault master secret." >&2
+				if [ "$vault_provider" = "bitwarden" ]; then
+					# --- Bitwarden Flow ---
+					local bw_session
+					bw_session="$("$(dirname "$0")/vault.sh" get-bitwarden-session)"
+					if [ -z "$bw_session" ]; then
+						echo "Error: Failed to retrieve Bitwarden session." >&2
 						exit 1
 					fi
-				fi
 
-				if [ -t 0 ]; then
-					local days_input=""
-					read -p "Vault password expiration in days (0 for never, enter to keep current): " days_input || true
-					if [ -n "$days_input" ]; then
-						GITTOOL_CFG_ROOT="$GITTOOL_CFG_ROOT" GITTOOL_CFG_FILE="$GITTOOL_CFG_FILE" "$(dirname "$0")/vault.sh" update-expiration "$days_input"
+					local pass=""
+					if [ -t 0 ]; then
+						printf "Enter password for new key (leave empty to auto-generate): "
+						stty -echo 2>/dev/null || true
+						read -r pass || true
+						stty echo 2>/dev/null || true
+						echo
+					fi
+					if [ -z "$pass" ]; then
+						if command -v openssl >/dev/null 2>&1; then
+							pass="$(openssl rand -base64 32)"
+						else
+							pass="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c 32 || true)"
+						fi
+					fi
+					master="$pass"
+
+					echo "Creating item in Bitwarden..."
+					local bw_json
+					# Escape quotes in variables for JSON
+					local safe_alias="${alias//\"/\\\"}"
+					local safe_email="${email//\"/\\\"}"
+					local safe_master="${master//\"/\\\"}"
+					
+					bw_json="$(printf '{
+						"name": "GitTool - %s",
+						"type": 1,
+						"favorite": true,
+						"login": {
+							"username": "%s",
+							"password": "%s"
+						}
+					}' "$safe_alias" "$safe_email" "$safe_master")"
+
+					local bw_output
+					if ! bw_output="$(echo "$bw_json" | bw encode | bw create item --session "$bw_session")"; then
+						echo "Error: Failed to create item in Bitwarden." >&2
+						exit 1
+					fi
+
+					local item_id
+					# Extract ID using grep/cut (assuming standard JSON format from bw)
+					item_id="$(echo "$bw_output" | grep -o '"id":"[^"]*"' | head -n1 | cut -d'"' -f4)"
+
+					if [ -z "$item_id" ]; then
+						echo "Error: Failed to extract item ID from Bitwarden output." >&2
+						exit 1
+					fi
+
+					# Encrypt ID to GPG file
+					local id_file_id
+					if command -v openssl >/dev/null 2>&1; then
+						id_file_id="$(openssl rand -hex 8)"
+					else
+						id_file_id="$(date +%s)"
+					fi
+					
+					local vault_storage="${GITTOOL_CONFIG_DIR:-$HOME/.gittool}/vault"
+					local id_file="$vault_storage/bw-id-${id_file_id}.gpg"
+					mkdir -p "$vault_storage"
+
+					local gpg_key
+					gpg_key="$(gpg --list-keys --with-colons 2>/dev/null | awk -F: '/^pub/ {print $5; exit}')"
+					if [ -z "$gpg_key" ]; then
+						echo "Error: No GPG key found." >&2
+						exit 1
+					fi
+
+					printf "%s" "$item_id" | gpg --batch --yes --encrypt --armor -r "$gpg_key" -o "$id_file"
+					echo "Bitwarden item ID encrypted to $id_file"
+
+					# Ask for expiration
+					local expire_days="0"
+					if [ -t 0 ]; then
+						read -p "Key expiration in days (0 for never): " expire_days || true
+					fi
+					
+					# Update config
+					vault_add_ssh_host "$alias" "bitwarden"
+
+					# Update id in [bitwarden] section
+					awk -v id_path="$id_file" '
+						BEGIN {in_bw=0}
+						/^[[]bitwarden[]]/ {in_bw=1; print; next}
+						/^[[][^]]+[]]/ {in_bw=0}
+						in_bw && /^id=/ {print "id=" id_path; next}
+						{print}
+					' "$GITTOOL_CFG_FILE" > "$GITTOOL_CFG_FILE.tmp" && mv "$GITTOOL_CFG_FILE.tmp" "$GITTOOL_CFG_FILE"
+
+					if ! grep -q "id=$id_file" "$GITTOOL_CFG_FILE"; then
+						awk -v id_path="$id_file" '
+							/^[[]bitwarden[]]/ {print; print "id=" id_path; next}
+							{print}
+						' "$GITTOOL_CFG_FILE" > "$GITTOOL_CFG_FILE.tmp" && mv "$GITTOOL_CFG_FILE.tmp" "$GITTOOL_CFG_FILE"
+					fi
+					
+					# Update expiration in [bitwarden] section if provided
+					if [ -n "$expire_days" ] && [ "$expire_days" != "0" ]; then
+						local expire_date
+						if date -v+1d +%Y-%m-%d >/dev/null 2>&1; then
+							expire_date="$(date -v+"${expire_days}"d +%Y-%m-%d 2>/dev/null)"
+						else
+							expire_date="$(date -d "+${expire_days} days" +%Y-%m-%d 2>/dev/null)"
+						fi
+						
+						# Update expires in [bitwarden] section
+						awk -v d="$expire_date" '
+							BEGIN {in_bw=0}
+							/^[[]bitwarden[]]/ {in_bw=1; print; next}
+							/^[[][^]]+[]]/ {in_bw=0}
+							in_bw && /^expires=/ {print "expires=" d; next}
+							{print}
+						' "$GITTOOL_CFG_FILE" > "$GITTOOL_CFG_FILE.tmp" && mv "$GITTOOL_CFG_FILE.tmp" "$GITTOOL_CFG_FILE"
+						
+						if ! grep -q "expires=$expire_date" "$GITTOOL_CFG_FILE"; then
+							awk -v d="$expire_date" '
+								/^[[]bitwarden[]]/ {print; print "expires=" d; next}
+								{print}
+							' "$GITTOOL_CFG_FILE" > "$GITTOOL_CFG_FILE.tmp" && mv "$GITTOOL_CFG_FILE.tmp" "$GITTOOL_CFG_FILE"
+						fi
+					fi
+
+				else
+					# --- Local Vault Flow ---
+					local user_input=""
+					if [ -t 0 ]; then
+						printf "Enter vault master secret (leave empty to auto-retrieve): "
+						stty -echo 2>/dev/null || true
+						read -r user_input || true
+						stty echo 2>/dev/null || true
+						echo
+					fi
+
+					if [ -n "$user_input" ]; then
+						master="$user_input"
+						ensure_vault_initialized >/dev/null 2>&1 || true
+					else
+						if ensure_vault_initialized; then
+							master="$(get_vault_master || true)"
+						fi
+						if [ -z "$master" ]; then
+							echo "Error: Failed to retrieve vault master secret." >&2
+							exit 1
+						fi
+					fi
+
+					if [ -t 0 ]; then
+						local days_input=""
+						read -p "Vault password expiration in days (0 for never, enter to keep current): " days_input || true
+						if [ -n "$days_input" ]; then
+							GITTOOL_CFG_ROOT="$GITTOOL_CFG_ROOT" GITTOOL_CFG_FILE="$GITTOOL_CFG_FILE" "$(dirname "$0")/vault.sh" update-expiration "$days_input"
+						fi
 					fi
 				fi
-			;;
+				;;
+			*)
+				echo "Proceeding without vault protection (empty passphrase)."
+				master=""
+				;;
 		esac
 
 		echo "Generating SSH key..."
@@ -657,7 +847,9 @@ add_ssh_key() {
 			else
 				ssh-keygen -t ed25519 -C "$email" -f "$keyfile"
 			fi
-			vault_add_ssh_host "$alias" || true
+			if [ "$vault_provider" = "local" ]; then
+				vault_add_ssh_host "$alias" "vault" || true
+			fi
 		fi
 
 		register_key_file "$keyfile" "$alias" "$hostname" "$do_agent" "$do_sign" "$dry_run"
