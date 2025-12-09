@@ -492,6 +492,38 @@ configure_bitwarden() {
 	echo "Bitwarden session key encrypted and stored in $GITTOOL_CFG_FILE"
 }
 
+vault_get_bitwarden_session() {
+	if [ ! -f "$GITTOOL_CFG_FILE" ]; then
+		echo "Vault config not found." >&2
+		return 1
+	fi
+
+	local bw_path
+	bw_path="$(awk '
+		BEGIN { in_bw=0 }
+		/^[[]bitwarden[]]/ { in_bw=1; next }
+		/^[[][^]]+[]]/ { in_bw=0 }
+		in_bw==1 && /^path=/ { print substr($0, 6); exit }
+	' "$GITTOOL_CFG_FILE")"
+
+	if [ -z "$bw_path" ] || [ ! -f "$bw_path" ]; then
+		echo "Bitwarden session file not found." >&2
+		return 1
+	fi
+
+	if ! command -v gpg >/dev/null 2>&1; then
+		echo "Error: gpg is required." >&2
+		return 1
+	fi
+
+	local session
+	if ! session="$(gpg --quiet --decrypt "$bw_path" 2>/dev/null | tr -d '\r' | sed -e 's/[[:space:]]*$//')"; then
+		echo "Failed to decrypt Bitwarden session." >&2
+		return 1
+	fi
+	printf '%s' "$session"
+}
+
 remove_bitwarden_config() {
 	if [ -f "$GITTOOL_CFG_FILE" ]; then
 		local tmp
@@ -560,6 +592,9 @@ main() {
 		--disable-bitwarden)
 			vault_set_bitwarden "false"
 			deconfigure_bitwarden
+			;;
+		get-bitwarden-session)
+			vault_get_bitwarden_session
 			;;
 		help|-h|--help)
 			usage
